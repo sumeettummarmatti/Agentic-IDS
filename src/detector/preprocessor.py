@@ -1,7 +1,8 @@
 """
-Feature preprocessing and engineering for CIC-Darknet2020
+Feature preprocessing with MULTI-LABEL classification
+Matches your notebook approach: detect specific attack types, not just benign/attack
 """
-#checkonce - get it checked from soham once - same settings as Xgboost file
+
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler, LabelEncoder
@@ -12,47 +13,49 @@ logger = logging.getLogger(__name__)
 class Preprocessor:
     """
     Handles data loading and preprocessing from CIC-Darknet2020
+    
+    TWO-LEVEL APPROACH:
+    1. Binary level: Encryption (benign vs attack-like) for quick filtering
+    2. Multi-label level: Label (specific attack type) for detailed classification
     """
     
-    # Features to drop (non-predictive for attack detection) #checkonce
+    # Features to drop (non-predictive)
     DROP_FEATURES = [
         'Flow ID', 'Src IP', 'Dst IP', 'Timestamp', 
         'Src Port', 'Dst Port', 'Flow Duration',
         'Idle Mean', 'Idle Std', 'Idle Max', 'Idle Min',
-        'Type', 'Label'
+        'Type'  # We'll use 'Label' instead
     ]
     
-    # Features for attack detection
-    ATTACK_FEATURES = [
-        'Protocol', 'Total Fwd Packet', 'Total Bwd packets',
-        'Total Length of Fwd Packet', 'Total Length of Bwd Packet',
-        'Fwd Packet Length Max', 'Fwd Packet Length Min',
-        'Fwd Packet Length Mean', 'Fwd Packet Length Std',
-        'Bwd Packet Length Max', 'Bwd Packet Length Min',
-        'Bwd Packet Length Mean', 'Bwd Packet Length Std',
-        'Flow Bytes/s', 'Flow Packets/s',
-        'Fwd IAT Total', 'Fwd IAT Mean', 'Fwd IAT Std',
-        'Bwd IAT Total', 'Bwd IAT Mean', 'Bwd IAT Std',
-        'Fwd PSH Flags', 'Fwd SYN Flags', 'Fwd RST Flags',
-        'Bwd PSH Flags', 'Bwd SYN Flags', 'Bwd RST Flags',
-        'Fwd Init Win Bytes', 'Bwd Init Win Bytes',
+    # ALL attack types in the dataset
+    ATTACK_CLASSES = [
+        'AUDIO-STREAMING',
+        'VIDEO-STREAMING', 
+        'VOIP',
+        'BROWSING',
+        'FILE-TRANSFER',
+        'P2P',
+        'EMAIL',
+        'CHAT',
+        'STREAMING',
+        'TORRENT'
     ]
     
-    def __init__(self):
-        self.scaler = StandardScaler()
-        self.label_encoders = {}
-        self.feature_names = None
-    
-    def load_data(self, filepath):  
+    def __init__(self, use_multi_label=True):
         """
-        Load CIC-Darknet2020 dataset
+        Initialize preprocessor
         
         Args:
-            filepath: Path to Darknet.xlsx
-            
-        Returns:
-            pd.DataFrame: Loaded and cleaned data
+            use_multi_label: If True, classify to specific attack types
+                           If False, binary benign/attack classification
         """
+        self.scaler = StandardScaler()
+        self.label_encoder = LabelEncoder()
+        self.feature_names = None
+        self.use_multi_label = use_multi_label
+    
+    def load_data(self, filepath):
+        """Load CIC-Darknet2020 dataset"""
         logger.info(f"Loading data from {filepath}...")
         
         df = pd.read_excel(filepath)
@@ -73,39 +76,54 @@ class Preprocessor:
     
     def prepare_features_and_labels(self, df):
         """
-        Prepare X and y from dataframe
+        Prepare features and labels with TWO CLASSIFICATION SCHEMES
         
-        Args:
-            df: Raw dataframe
-            
         Returns:
-            tuple: (X, y) ready for training
+            tuple: (X, y_binary, y_multi) where:
+            - X: Features (71 numeric columns)
+            - y_binary: Binary labels (0=benign, 1=attack-like) from Encryption
+            - y_multi: Multi-class labels (specific attack types) from Label
         """
-        # Create encryption label (0=benign, 1=attack)
-        # High encryption (Tor/VPN) = attack-like, Standard = benign
-        df['Encryption'] = df['Type'].map({
-            'Non-Tor': 0,
-            'NonVPN': 0,
-            'Tor': 1,
-            'VPN': 1
-        })
         
-        y = df['Encryption'].values
+        # ====== BINARY LEVEL ======
+        # Encryption: Is this benign or attack-like?
+        if 'Type' in df.columns:
+            df['Encryption'] = df['Type'].map({
+                'Non-Tor': 0,    # Benign
+                'NonVPN': 0,     # Benign
+                'Tor': 1,        # Attack-like (encrypted anonymity)
+                'VPN': 1         # Attack-like (encrypted anonymity)
+            })
         
-        # Select numeric features
+        y_binary = df['Encryption'].values if 'Encryption' in df.columns else None
+        
+        # ====== MULTI-LABEL LEVEL ======
+        # Label: What specific type of attack/traffic is this?
+        if 'Label' in df.columns:
+            # Encode the specific attack types
+            self.label_encoder.fit(self.ATTACK_CLASSES)
+            y_multi = self.label_encoder.transform(df['Label'])
+        else:
+            y_multi = None
+        
+        # ====== FEATURES ======
+        # Select numeric features only
         X = df.select_dtypes(include=[np.number])
         X = X.fillna(0)
         
         # Store feature names
         self.feature_names = X.columns.tolist()
-        
         logger.info(f"Features: {len(self.feature_names)}")
-        logger.info(f"Labels distribution: {np.bincount(y.astype(int))}")
         
-        return X.values, y
+        if y_binary is not None:
+            logger.info(f"Binary distribution: {np.bincount(y_binary.astype(int))}")
+        if y_multi is not None:
+            logger.info(f"Multi-class distribution: {np.bincount(y_multi.astype(int))}")
+        
+        return X.values, y_binary, y_multi
     
     def fit_scaler(self, X):
-        """Fit standard scaler on training data"""
+        """Fit scaler on training data"""
         self.scaler.fit(X)
         logger.info("✓ Scaler fitted")
     
@@ -116,3 +134,9 @@ class Preprocessor:
     def fit_transform(self, X):
         """Fit and transform in one step"""
         return self.scaler.fit_transform(X)
+    
+    def get_label_name(self, label_index):
+        """Convert label index back to attack type name"""
+        if hasattr(self, 'label_encoder'):
+            return self.label_encoder.inverse_transform([label_index])
+        return "Unknown"

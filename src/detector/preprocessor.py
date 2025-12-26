@@ -100,9 +100,26 @@ class Preprocessor:
         # ====== MULTI-LABEL LEVEL ======
         # Label: What specific type of attack/traffic is this?
         if 'Label' in df.columns:
+            # Filter out unknown labels (e.g. '0', 'VPN-FAIL')
+            df = df[df['Label'].isin(self.ATTACK_CLASSES)]
+            
             # Encode the specific attack types
             self.label_encoder.fit(self.ATTACK_CLASSES)
             y_multi = self.label_encoder.transform(df['Label'])
+            
+            # Re-align X and y_binary to the filtered df
+            # This is tricky because we usually extract X first.
+            # Let's re-extract everything to be safe
+            
+            y_binary = df['Encryption'].values if 'Encryption' in df.columns else None
+            
+            X = df.select_dtypes(include=[np.number])
+            X = X.fillna(0)
+            
+            # Store feature names
+            self.feature_names = X.columns.tolist()
+            
+            return X.values, y_binary, y_multi
         else:
             y_multi = None
         

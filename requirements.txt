@@ -1,6 +1,4 @@
-# =========================
 # Core ML & Data
-# =========================
 numpy>=1.24.0
 pandas>=2.0.0
 openpyxl>=3.1.0
@@ -9,44 +7,25 @@ xgboost>=2.0.0
 torch>=2.0.0
 joblib>=1.3.0
 seaborn>=0.13.2
+matplotlib>=3.7.0
 
-# =========================
 # Reinforcement Learning
-# =========================
 gymnasium>=0.28.0
 stable-baselines3>=2.0.0
+shimmy>=1.3.0
 
-# =========================
-# LLMs & Agents
-# =========================
-openai>=1.0.0
+# LLM Providers & Agents
 groq>=0.4.0
 ollama>=0.1.0
-langchain>=0.1.0
-langchain-groq>=0.0.10
-langchain-community>=0.0.10
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
+openai>=1.0.0
 
-# =========================
-# Utilities
-# =========================
+# Utils
 python-dotenv>=1.0.0
-pyyaml>=6.0
 requests>=2.31.0
 tqdm>=4.65.0
+colorama>=0.4.6
 
-# =========================
-# Visualization & Notebooks
-# =========================
-matplotlib>=3.7.0
-jupyter>=1.0.0
-shap>=0.42.0
-
-# =========================
-# Testing & Dev Tools
-# =========================
+# Dev/Test
 pytest>=7.4.0
-pytest-cov>=4.1.0
 black>=23.0.0
 flake8>=6.0.0

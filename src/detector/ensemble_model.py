@@ -234,14 +234,23 @@ class EnsembleDetector:
         self.training_classes_ = self.label_remapper.classes_
         num_classes_in_batch = len(self.training_classes_)
         
-        logger.info(f"Training on {num_classes_in_batch} unique classes: {self.training_classes_}")
+        # Update input size based on training data (e.g. 50 features after selection)
+        self.input_size = X_train.shape[1]
         
-        # 1. Train XGBoost
+        logger.info(f"Training on {num_classes_in_batch} unique classes: {self.training_classes_}")
+        logger.info(f"Input feature size: {self.input_size}")
+        
+        # 1. Train XGBoost (Optimized)
         self.xgb_model = XGBClassifier(
-            n_estimators=100,
-            max_depth=8, 
-            learning_rate=0.1,
-            num_class=num_classes_in_batch, # Use actual unique count
+            n_estimators=200,
+            max_depth=4, 
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_alpha=0.1,
+            reg_lambda=1.0,
+            min_child_weight=5,
+            num_class=num_classes_in_batch,
             objective='multi:softmax',
             random_state=42,
             n_jobs=-1

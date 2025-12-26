@@ -165,10 +165,46 @@ class ThreatAnalysisCouncil:
         logger.info("THREAT ANALYSIS COUNCIL INITIALIZED")
         logger.info("=" * 60)
         logger.info(f"Security Analyst:  {self.analyst_config['provider']} - {self.analyst_config['model']}")
-        logger.info(f"ML Engineer:       {self.engineer_config['provider']} - {self.engineer_config['model']}")
         logger.info(f"Threat Intel:      {self.intel_config['provider']} - {self.intel_config['model']}")
         logger.info("=" * 60)
-    
+        
+        # Load prompts from config file
+        self.prompts = self._load_prompts('config/prompts/threat_analysis.txt')
+
+    def _load_prompts(self, filepath: str) -> Dict[str, str]:
+        """Load and parse prompt templates from file"""
+        prompts = {}
+        current_section = None
+        current_content = []
+        
+        try:
+            with open(filepath, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('[') and line.endswith(']'):
+                        # Save previous section
+                        if current_section:
+                            prompts[current_section] = '\n'.join(current_content).strip()
+                        
+                        # Start new section
+                        current_section = line[1:-1] # Remove []
+                        current_content = []
+                    else:
+                        if current_section:
+                            current_content.append(line)
+                            
+            # Save last section
+            if current_section:
+                prompts[current_section] = '\n'.join(current_content).strip()
+                
+            logger.info(f"✓ Loaded {len(prompts)} prompts from {filepath}")
+            return prompts
+            
+        except Exception as e:
+            logger.error(f"Failed to load prompts from {filepath}: {e}")
+            # Fallback to hardcoded defaults (simplified) if file fails
+            return {}
+
     def _parse_model_config(self, config_string: str) -> Dict[str, str]:
         """
         Parse model config string in format: 'provider:model'
@@ -232,28 +268,21 @@ class ThreatAnalysisCouncil:
         """Security analyst: Attack classification"""
         logger.info(f"\n[Security Analyst - {self.analyst_config['provider'].upper()}:{self.analyst_config['model']}]")
         
-        prompt = f"""You are a senior cybersecurity analyst with 10 years experience.
-Analyze this network flow for attack characteristics:
-
-Flow Data:
-- Protocol: {flow_data.get('Protocol', 'Unknown')}
-- Fwd Packets: {flow_data.get('Total Fwd Packet', 0)}
-- Bwd Packets: {flow_data.get('Total Bwd packets', 0)}
-- SYN Flags: {flow_data.get('Fwd SYN Flags', 0)}
-- RST Flags: {flow_data.get('Fwd RST Flags', 0)}
-- Data Rate (Bytes/s): {flow_data.get('Flow Bytes/s', 0)}
-
-Detector Prediction:
-- Classification: {"ATTACK" if prediction.get('prediction') == 1 else "BENIGN"}
-- Confidence: {prediction.get('confidence', 0.5):.2%}
-
-Provide your assessment in this format:
-1. Attack Type: [DDoS/PortScan/Evasion/None]
-2. Confidence: [0-100]%
-3. Key Indicators: [list 2-3 indicators]
-4. Recommended Actions: [1-2 immediate responses]
-
-Keep response under 200 words."""
+        # Prepare data string for template
+        flow_str = "\n".join([f"- {k}: {v}" for k, v in flow_data.items()])
+        pred_str = f"- Classification: {'ATTACK' if prediction.get('prediction')==1 else 'BENIGN'}\n- Confidence: {prediction.get('confidence', 0.5):.2%}\n- Type: {prediction.get('attack_type', 'Unknown')}"
+        
+        # Get template or legacy default
+        template = self.prompts.get('SECURITY_ANALYST_PROMPT', "")
+        
+        if template:
+            prompt = template.format(flow_data=flow_str, prediction=pred_str)
+        else:
+            # Legacy fallback
+            prompt = f"""You are a senior cybersecurity analyst. Analyze this network flow:
+            Flow Data: {flow_str}
+            Prediction: {pred_str}
+            Respond with Attack Type, Confidence, Indicators, Actions."""
         
         try:
             analysis = self.llm_client.generate(
@@ -280,23 +309,18 @@ Keep response under 200 words."""
         """ML Engineer: Feature pattern analysis"""
         logger.info(f"\n[ML Engineer - {self.engineer_config['provider'].upper()}:{self.engineer_config['model']}]")
         
-        prompt = f"""You are an ML engineer specializing in network intrusion detection.
-Analyze this flow's feature patterns:
-
-Key Features:
-- Packet Ratio (Fwd/Bwd): {flow_data.get('Total Fwd Packet', 0) / max(1, flow_data.get('Total Bwd packets', 1)):.2f}
-- Avg Packet Size: {(flow_data.get('Total Length of Fwd Packet', 0) / max(1, flow_data.get('Total Fwd Packet', 1))):.0f} bytes
-- Flow Rate: {flow_data.get('Flow Packets/s', 0):.0f} packets/sec
-- SYN/Total Ratio: {flow_data.get('Fwd SYN Flags', 0) / max(1, flow_data.get('Total Fwd Packet', 1)):.2%}
-
-Detector Output: {prediction.get('confidence', 0.5):.2%} confidence for attack
-
-Provide:
-1. Feature Anomalies: [what's statistically unusual]
-2. Model Explanation: [why model classified as attack]
-3. Suggested Monitoring: [which features to track]
-
-Keep response under 200 words."""
+        # Prepare data strings
+        features_str = "\n".join([f"- {k}: {v}" for k, v in flow_data.items()])
+        model_out_str = f"{prediction.get('confidence', 0.5):.2%} confidence for {prediction.get('attack_type', 'Unknown')}"
+        
+        # Get template
+        template = self.prompts.get('ML_ENGINEER_PROMPT', "")
+        
+        if template:
+            prompt = template.format(features=features_str, model_output=model_out_str)
+        else:
+            # Legacy fallback
+            prompt = f"Analyze ML features: {features_str}. Model says: {model_out_str}"
         
         try:
             analysis = self.llm_client.generate(
@@ -323,21 +347,18 @@ Keep response under 200 words."""
         """Threat Intel: Signature matching"""
         logger.info(f"\n[Threat Intel - {self.intel_config['provider'].upper()}:{self.intel_config['model']}]")
         
-        prompt = f"""You are a threat intelligence analyst tracking global cyber attacks.
-Correlate this network flow with known attack signatures:
-
-Flow Characteristics:
-- Protocol: {flow_data.get('Protocol', 6)} (6=TCP, 17=UDP)
-- SYN Flood Indicator: {'YES' if flow_data.get('Fwd SYN Flags', 0) > 100 else 'NO'}
-- Port Scan Indicator: {'YES' if flow_data.get('Total Fwd Packet', 0) == 1 else 'NO'}
-- High Packet Rate: {'YES' if flow_data.get('Flow Packets/s', 0) > 1000 else 'NO'}
-
-Provide:
-1. Known Attack Match: [Mirai botnet/Slowloris/Generic scanner/None]
-2. Attribution Confidence: [0-100]%
-3. Threat Context: [brief description of threat if matched]
-
-Keep response under 150 words."""
+        # Prepare data strings
+        char_str = "\n".join([f"- {k}: {v}" for k, v in flow_data.items()])
+        patterns_str = "Known signatures: Mirai, Slowloris, UDP Flood, TCP SYN Flood, XSS, SQLi"
+        
+        # Get template
+        template = self.prompts.get('THREAT_INTEL_PROMPT', "")
+        
+        if template:
+            prompt = template.format(characteristics=char_str, known_patterns=patterns_str)
+        else:
+            # Legacy fallback
+            prompt = f"Correlate flow: {char_str} with known patterns."
         
         try:
             analysis = self.llm_client.generate(

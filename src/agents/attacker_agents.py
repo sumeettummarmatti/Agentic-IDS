@@ -4,7 +4,7 @@ Attacker agents that generate synthetic attack flows
 - PortScan Agent (slow scan, decoy traffic)
 - Evasion Agent (adversarial examples)
 """
-#syn data generator - just like ddos agent we had built - need to add more details
+#syn data generator - just like ddos agent we had built -#checkonce need to add more details
 import pandas as pd
 import numpy as np
 import random

@@ -1,0 +1,50 @@
+# Environment
+.env
+.env.local
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# Data (large files)
+data/raw/*.xlsx
+data/raw/*.csv
+data/processed/*.pkl
+data/synthetic/*.csv
+
+# Models
+models/checkpoints/*.pkl
+models/trained/*.joblib
+models/trained/*.h5
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# LLM outputs (can be large)
+*.txt.bak
+outputs/

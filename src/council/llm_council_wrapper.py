@@ -136,9 +136,32 @@ class LLMClient:
                 logger.error(f"Ollama error: {response.text}")
                 return f"Error: Ollama returned {response.status_code}"
                 
+            if response.status_code == 200:
+                return response.json()['response']
+            else:
+                logger.error(f"Ollama error: {response.text}")
+                return f"Error: Ollama returned {response.status_code}"
+                
         except Exception as e:
             logger.error(f"Ollama generation failed: {e}")
             return f"Error: {str(e)}"
+
+    def invoke_model(self, model_id: str, prompt: str) -> str:
+        """
+        Public API to invoke a model by ID (e.g., 'groq:llama-3.1-8b-instant')
+        """
+        if ':' not in model_id:
+            logger.error(f"Invalid model_id format: {model_id}. Expected 'provider:model'")
+            return "Error: Invalid model ID"
+            
+        provider, model_name = model_id.split(':', 1)
+        
+        if provider.lower() == 'groq':
+            return self._generate_groq(prompt, model_name, max_tokens=1024, temperature=0.7)
+        elif provider.lower() == 'ollama':
+            return self._generate_ollama(prompt, model_name, max_tokens=1024, temperature=0.7)
+        else:
+            return f"Error: Unknown provider {provider}"
 
 
 class ThreatAnalysisCouncil:
@@ -289,7 +312,7 @@ class ThreatAnalysisCouncil:
                 prompt=prompt,
                 provider=self.analyst_config['provider'],
                 model=self.analyst_config['model'],
-                max_tokens=300,
+                max_tokens=1024,
                 temperature=0.3
             )
             
@@ -327,7 +350,7 @@ class ThreatAnalysisCouncil:
                 prompt=prompt,
                 provider=self.engineer_config['provider'],
                 model=self.engineer_config['model'],
-                max_tokens=300,
+                max_tokens=1024,
                 temperature=0.3
             )
             
@@ -365,7 +388,7 @@ class ThreatAnalysisCouncil:
                 prompt=prompt,
                 provider=self.intel_config['provider'],
                 model=self.intel_config['model'],
-                max_tokens=250,
+                max_tokens=1024,
                 temperature=0.3
             )
             

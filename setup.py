@@ -4,8 +4,8 @@ setup(
     name="agentic-ids",
     version="0.1.0",
     description="Agentic AI-powered Intrusion Detection System",
-    author="Your Name",
-    author_email="your.email@example.com",
+    author="Sumeet",
+    author_email="sumeettummarmatti@gmail.com",
     packages=find_packages(),
     python_requires=">=3.10",
     install_requires=[

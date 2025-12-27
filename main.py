@@ -168,6 +168,54 @@ def main():
              logger.info("-> High confidence threat! Summoning Council...")
              council_result = council.analyze_threat(flow_dict, prediction)
              
+             # --- STAGE 2: KARPATHY COUNCIL SOLUTION FINDING ---
+             try:
+                 # Import inside loop to avoid top-level async mess if not needed
+                 from src.council.karpathy_adapter import find_solutions
+                 import asyncio
+                 
+                 # The main function is not async, so we use asyncio.run
+                 # Note: Ideally main should be async, but for this integration we wrap it.
+                 # The council_result is EITHER a dict OR a Pydantic model depending on implementation
+                 # We handle both cases robustly
+                 
+                 def safe_get(obj, key, default):
+                     if isinstance(obj, dict):
+                         return obj.get(key, default)
+                     return getattr(obj, key, default)
+
+                 c_score = safe_get(council_result, 'consensus_score', 'N/A')
+                 severity = safe_get(council_result, 'severity', 'High')
+                 
+                 analyst_resp = safe_get(council_result, 'analyst_response', {})
+                 analyst_text = safe_get(analyst_resp, 'analysis', 'N/A')
+                 
+                 engineer_resp = safe_get(council_result, 'engineer_response', {})
+                 engineer_text = safe_get(engineer_resp, 'analysis', 'N/A')
+                 
+                 council_analysis_text = f"""
+                 Consensus Score: {c_score}
+                 Severity: {severity}
+                 
+                 Security Analyst Report:
+                 {analyst_text}
+                 
+                 ML Engineer Report:
+                 {engineer_text}
+                 """
+                 
+                 logger.info("\n-> Summoning Karpathy Council for Solution Finding...")
+                 solutions = asyncio.run(find_solutions(council_analysis_text))
+                 
+                 logger.info("\n" + "="*60)
+                 logger.info("KARPATHY COUNCIL: RECOMMENDED SOLUTIONS")
+                 logger.info("="*60)
+                 logger.info(solutions)
+                 logger.info("="*60 + "\n")
+                 
+             except Exception as e:
+                 logger.error(f"Failed to run Karpathy Council: {e}")
+
              # Defender
              # Create perception
              perception = {

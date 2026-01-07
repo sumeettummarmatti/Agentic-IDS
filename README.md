@@ -104,5 +104,3 @@ The system is optimized for key network flow features including:
 4.  Push to the branch
 5.  Create a Pull Request
 
-## 📄 License
-MIT License

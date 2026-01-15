@@ -124,7 +124,23 @@
                      │
                      ▼
         ┌──────────────────────────────────┐
-        │ 5. HUMAN-READABLE REPORT         │
+        │ 5. RL DEFENDER AGENT (Action)    │
+        │                                  │
+        │  Input: Confidence + Severity    │
+        │  Model: PPO (Stable Baselines3)  │
+        │                                  │
+        │  Executes Mitigation:            │
+        │  ► BLOCK_SOURCE                  │
+        │  ► RATE_LIMIT                    │
+        │  ► DEEP_PACKET_INSPECTION        │
+        │  ► MONITOR                       │
+        │                                  │
+        │  *Optimizes for Uptime/Safety*   │
+        └────────────┬─────────────────────┘
+                     │
+                     ▼
+        ┌──────────────────────────────────┐
+        │ 6. HUMAN-READABLE REPORT         │
         │                                  │
         │ THREAT ANALYSIS COUNCIL REPORT   │
         │                                  │
@@ -149,6 +165,7 @@
         │ FINAL ASSESSMENT:                │
         │ DDoS Attack - HIGH SEVERITY      │
         │ Council Consensus: 87%           │
+        │ DEFENDER ACTION: BLOCK_SOURCE    │
         │                                  │
         └──────────────────────────────────┘
 ```
@@ -296,6 +313,13 @@ New Flow Arrives:
 │ Consensus: 91% attack, DDoS threat      │
 └──────────────────────────────────────────┘
          │
+         ▼ (RL Defender Action)
+┌──────────────────────────────────────────┐
+│ Observation: High Threat, High Conf      │
+│ Action: BLOCK_SOURCE                     │
+│ Reward: +2.0 (Correctly mitigated)       │
+└──────────────────────────────────────────┘
+         │
          ▼ (Final Report)
 ┌──────────────────────────────────────────┐
 │ ALERT: DDoS Attack Detected              │
@@ -389,6 +413,7 @@ You run: python main.py
 │          ├─ Attack 4: LLM analysis → 2 seconds
 │          ├─ Attack 5: LLM analysis → 2 seconds
 │          └─ Status: ✓ Council analyzed 5 attacks
+│          └─ Defender: Actions executed (Block/Monitor)
 │
 └─ [60s]   COMPLETE!
            Total time: ~1 minute (per run)

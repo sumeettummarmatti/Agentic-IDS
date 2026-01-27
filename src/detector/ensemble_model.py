@@ -133,7 +133,7 @@ class EnsembleDetector:
                              lstm_proba = raw_lstm_proba
             
             # --- Ensemble (Soft Voting) ---
-            final_proba = (0.7 * xgb_proba) + (0.3 * lstm_proba)
+            final_proba = (0.7 * xgb_proba) + (0.3 * lstm_proba)  #when doing time-series near real-time prediction give lstm more weightage
             
             prediction_idx = np.argmax(final_proba)
             confidence = final_proba[prediction_idx]

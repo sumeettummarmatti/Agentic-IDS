@@ -4,7 +4,7 @@ An advanced, autonomous Intrusion Detection System (IDS) that combines high-spee
 
 ![Agentic IDS Architecture](https://via.placeholder.com/800x400?text=Agentic+IDS+Architecture)
 
-## 🚀 Key Features
+##  Key Features
 
 *   **Ensemble Detection**: Combines **XGBoost** (for tabular accuracy) and **LSTM** (for sequence analysis) to detect attacks with **99.9% accuracy**.
 *   **Threat Analysis Council**: A multi-agent LLM system (Security Analyst, ML Engineer, Threat Intel) that investigates high-confidence threats.
@@ -12,14 +12,14 @@ An advanced, autonomous Intrusion Detection System (IDS) that combines high-spee
 *   **Dynamic Configuration**: Customize agent personas and logic via simple text files without changing code.
 *   **Live Monitoring**: Replay real network traffic flows to test the system in real-time.
 
-## 🛠️ Architecture
+##  Architecture
 
 The system operates in three phases:
 1.  **Detection Layer**: Analyzes raw network flows using a pre-trained Ensemble Model.
 2.  **Reasoning Layer**: If a threat is detected (>60% confidence), the **Council** convenes to correlate features, match signatures, and assess severity.
 3.  **Response Layer**: The **Defender Agent** receives the Council's report and executes the optimal mitigation strategy.
 
-## 📦 Installation
+## Installation
 
 1.  **Clone the repository**
     ```bash
@@ -58,7 +58,7 @@ The system operates in three phases:
     ollama pull qwen2.5:8b  # Or your preferred model
     ```
 
-## 🚦 Usage
+##  Usage
 
 ### 1. Run the Full Pipeline
 Starts the simulation, trains the models on your data, and begins the monitoring loop.
@@ -79,7 +79,7 @@ Verify the detection performance against the test set.
 python benchmark.py
 ```
 
-## ⚙️ Configuration
+##  Configuration
 
 ### Dynamic Prompts
 You can tune the behavior of the AI Council **without coding**.
@@ -96,13 +96,3 @@ The system is optimized for key network flow features including:
 *   `Flow Duration`, `Flow Bytes/s`, `Flow Packets/s`
 *   `Fwd/Bwd Header Length`
 *   `SYN/RST Flag Counts`
-
-## 🤝 Contributing
-1.  Fork the repo
-2.  Create a feature branch
-3.  Commit your changes
-4.  Push to the branch
-5.  Create a Pull Request
-
-## 📄 License
-MIT License

@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 from sklearn.model_selection import train_test_split
 
 # Load environment variables FIRST
+# Load environment variables (check current dir first, then config)
+load_dotenv() 
 load_dotenv(dotenv_path='config/.env')
 
 from src.detector.ensemble_model import EnsembleDetector
@@ -21,6 +23,7 @@ logger = logging.getLogger(__name__)
 def parse_args():
     parser = argparse.ArgumentParser(description='Agentic IDS')
     parser.add_argument('--live-data', type=str, help='Path to custom Excel file for live monitoring simulation')
+    parser.add_argument('--provider', type=str, choices=['hf', 'groq', 'ollama'], help='Override LLM_PROVIDER from .env')
     return parser.parse_args()
 
 def main():
@@ -32,11 +35,16 @@ def main():
         print(f"MODE: Custom Live Data ({args.live_data})")
     else:
         print("MODE: Standard Simulation")
+    
+    provider = args.provider or os.getenv('LLM_PROVIDER', 'groq').lower()
+    os.environ['LLM_PROVIDER'] = provider
+    
+    print(f"MODELS: {provider.upper()}")
     print("="*80)
 
     # --- 1. INITIALIZE AGENTS ---
     detector = EnsembleDetector(use_lstm=True)
-    council = ThreatAnalysisCouncil()
+    council = ThreatAnalysisCouncil(provider=provider)
     defender = DefenderRLAgent()
     preprocessor = Preprocessor()
     

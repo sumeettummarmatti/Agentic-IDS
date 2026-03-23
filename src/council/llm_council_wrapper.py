@@ -9,6 +9,7 @@ from typing import Dict, List
 from dataclasses import dataclass
 from datetime import datetime
 import requests
+from huggingface_hub import InferenceClient
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ class LLMClient:
         # Initialize both providers
         self._init_groq()
         self._init_ollama()
+        self._init_huggingface()
     
     def _init_groq(self):
         """Initialize Groq client"""
@@ -56,11 +58,22 @@ class LLMClient:
             api_key = os.getenv('GROQ_API_KEY')
             if api_key:
                 self.groq_client = Groq(api_key=api_key)
+                self.groq_client = Groq(api_key=api_key)
                 logger.info("✓ Groq client initialized")
             else:
                 logger.warning("GROQ_API_KEY not found in environment")
         except ImportError:
             logger.warning("Groq not installed. Run: pip install groq")
+    
+    def _init_huggingface(self):
+        """Initialize Hugging Face client"""
+        self.hf_token = os.getenv('HF_API_KEY')
+        if self.hf_token:
+            self.hf_client = InferenceClient(token=self.hf_token)
+            logger.info("✓ Hugging Face client initialized")
+        else:
+            self.hf_client = None
+            logger.warning("HF_API_KEY not found in environment (required for HF models)")
     
     def _init_ollama(self):
         """Initialize Ollama connection"""
@@ -92,6 +105,8 @@ class LLMClient:
             return self._generate_groq(prompt, model, max_tokens, temperature)
         elif provider.lower() == 'ollama':
             return self._generate_ollama(prompt, model, max_tokens, temperature)
+        elif provider.lower() == 'hf':
+            return self._generate_huggingface(prompt, model, max_tokens, temperature)
         else:
             logger.error(f"Unknown provider: {provider}")
             return f"Error: Invalid LLM provider '{provider}'"
@@ -146,6 +161,27 @@ class LLMClient:
             logger.error(f"Ollama generation failed: {e}")
             return f"Error: {str(e)}"
 
+    def _generate_huggingface(self, prompt: str, model: str, max_tokens: int, temperature: float) -> str:
+        """Generate using Hugging Face InferenceClient"""
+        if not self.hf_client:
+             return "Error: HF_API_KEY not found or client not initialized"
+        
+        try:
+            # Use chat completion API for compatibility
+            messages = [{"role": "user", "content": prompt}]
+            
+            completion = self.hf_client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+            return completion.choices[0].message.content
+            
+        except Exception as e:
+            logger.error(f"HF generation failed: {e}")
+            return f"Error: {str(e)}"
+
     def invoke_model(self, model_id: str, prompt: str) -> str:
         """
         Public API to invoke a model by ID (e.g., 'groq:llama-3.1-8b-instant')
@@ -160,6 +196,8 @@ class LLMClient:
             return self._generate_groq(prompt, model_name, max_tokens=1024, temperature=0.7)
         elif provider.lower() == 'ollama':
             return self._generate_ollama(prompt, model_name, max_tokens=1024, temperature=0.7)
+        elif provider.lower() == 'hf':
+            return self._generate_huggingface(prompt, model_name, max_tokens=1024, temperature=0.7)
         else:
             return f"Error: Unknown provider {provider}"
 
@@ -170,24 +208,58 @@ class ThreatAnalysisCouncil:
     Each member can use different provider + model
     """
     
-    def __init__(self):
+    def __init__(self, provider: str = 'groq'):
         self.llm_client = LLMClient()
+        self.provider = provider.lower()
         
-        # Load council member configurations from env
-        self.analyst_config = self._parse_model_config(
-            os.getenv('ANALYST_MODEL', 'groq:llama-3.1-8b-instant')
-        )
-        self.engineer_config = self._parse_model_config(
-            os.getenv('ENGINEER_MODEL', 'groq:llama-3.3-70b-versatile')
-        )
-        self.intel_config = self._parse_model_config(
-            os.getenv('INTEL_MODEL', 'ollama:qwen3:8b')
-        )
+        if self.provider == 'hf':
+            # Hugging Face Configuration
+            self.analyst_config = self._parse_model_config(
+                os.getenv('HF_ANALYST_MODEL', os.getenv('ANALYST_MODEL', 'meta-llama/Meta-Llama-3-8B-Instruct')), 
+                default_provider='hf'
+            )
+            self.engineer_config = self._parse_model_config(
+                os.getenv('HF_ENGINEER_MODEL', os.getenv('ENGINEER_MODEL', 'mistralai/Mistral-7B-Instruct-v0.3')),
+                default_provider='hf'
+            )
+            self.intel_config = self._parse_model_config(
+                os.getenv('HF_INTEL_MODEL', os.getenv('INTEL_MODEL', 'google/gemma-7b-it')),
+                default_provider='hf'
+            )
+        elif self.provider == 'ollama':
+            # Ollama Configuration
+            self.analyst_config = self._parse_model_config(
+                os.getenv('OLLAMA_ANALYST_MODEL', os.getenv('ANALYST_MODEL', 'llama3.1:8b')),
+                default_provider='ollama'
+            )
+            self.engineer_config = self._parse_model_config(
+                os.getenv('OLLAMA_ENGINEER_MODEL', os.getenv('ENGINEER_MODEL', 'llama3.1:8b')),
+                default_provider='ollama'
+            )
+            self.intel_config = self._parse_model_config(
+                os.getenv('OLLAMA_INTEL_MODEL', os.getenv('INTEL_MODEL', 'qwen2.5:8b')),
+                default_provider='ollama'
+            )
+        else:
+            # Default Configuration (Groq)
+            self.analyst_config = self._parse_model_config(
+                os.getenv('GROQ_ANALYST_MODEL', os.getenv('ANALYST_MODEL', 'llama-3.1-8b-instant')),
+                default_provider='groq'
+            )
+            self.engineer_config = self._parse_model_config(
+                os.getenv('GROQ_ENGINEER_MODEL', os.getenv('ENGINEER_MODEL', 'llama-3.3-70b-versatile')),
+                default_provider='groq'
+            )
+            self.intel_config = self._parse_model_config(
+                os.getenv('GROQ_INTEL_MODEL', os.getenv('INTEL_MODEL', 'llama-3.1-8b-instant')),
+                default_provider='groq'
+            )
         
         logger.info("=" * 60)
         logger.info("THREAT ANALYSIS COUNCIL INITIALIZED")
         logger.info("=" * 60)
         logger.info(f"Security Analyst:  {self.analyst_config['provider']} - {self.analyst_config['model']}")
+        logger.info(f"ML Engineer:       {self.engineer_config['provider']} - {self.engineer_config['model']}")
         logger.info(f"Threat Intel:      {self.intel_config['provider']} - {self.intel_config['model']}")
         logger.info("=" * 60)
         
@@ -228,17 +300,10 @@ class ThreatAnalysisCouncil:
             # Fallback to hardcoded defaults (simplified) if file fails
             return {}
 
-    def _parse_model_config(self, config_string: str) -> Dict[str, str]:
+    def _parse_model_config(self, config_string: str, default_provider: str = 'groq') -> Dict[str, str]:
         """
         Parse model config string in format: 'provider:model'
-        
-        Examples:
-            'groq:llama-3.1-8b-instant'
-            'ollama:qwen2.5:8b'
-            'llama-3.1-70b-versatile' (defaults to groq)
-        
-        Returns:
-            dict: {'provider': str, 'model': str}
+        If provider is missing, use default_provider.
         """
         if ':' in config_string:
             parts = config_string.split(':', 1)
@@ -247,9 +312,8 @@ class ThreatAnalysisCouncil:
                 'model': parts[1]
             }
         else:
-            # Default to groq if no provider specified
             return {
-                'provider': 'groq',
+                'provider': default_provider,
                 'model': config_string
             }
     

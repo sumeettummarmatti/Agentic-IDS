@@ -42,21 +42,33 @@ The system operates in three phases:
     Create a `.env` file in the `config/` directory:
     ```bash
     cp config/.env.example config/.env
+    # OR create one in the root directory (recommended for HF support)
+    cp .env.example .env
     ```
-    Edit `config/.env` and add your API keys:
+    Edit `.env` and add your API keys:
     ```ini
+    # Choose your provider: hf | groq | ollama
+    LLM_PROVIDER=hf
+
     GROQ_API_KEY=gsk_...
-    ANALYST_MODEL=groq:llama-3.1-8b-instant
-    ENGINEER_MODEL=groq:llama-3.3-70b-versatile
-    INTEL_MODEL=ollama:qwen2.5:8b
+    HF_API_KEY=hf_...  # Required if using hf provider
+    
+    # Optional Model Overrides per Provider
+    HF_ANALYST_MODEL=meta-llama/Meta-Llama-3-8B-Instruct
+    GROQ_ANALYST_MODEL=llama-3.1-8b-instant
+    OLLAMA_ANALYST_MODEL=llama3.1:8b
+    # ...
     ```
 
 5.  **Set up Ollama (Local LLM)**
     Ensure [Ollama](https://ollama.com/) is installed and running:
     ```bash
     ollama serve
+    ollama serve
     ollama pull qwen2.5:8b  # Or your preferred model
     ```
+    
+    *(Skip this step if using Hugging Face Inference API)*
 
 ## 🚦 Usage
 
@@ -64,6 +76,12 @@ The system operates in three phases:
 Starts the simulation, trains the models on your data, and begins the monitoring loop.
 ```bash
 python main.py
+```
+**Optionally, override the configured LLM provider explicitly:**
+```bash
+python main.py --provider hf
+python main.py --provider ollama
+python main.py --provider groq
 ```
 
 ### 2. Live Data Replay

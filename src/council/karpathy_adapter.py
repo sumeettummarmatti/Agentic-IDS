@@ -47,12 +47,27 @@ async def _patched_query_model(model: str, messages: List[Dict[str, str]], timeo
     target_provider = "groq"
     target_model_name = "llama-3.3-70b-versatile" # Default to strongest
     
-    if "gemini" in model or "gpt" in model:
-        target_model_name = "llama-3.3-70b-versatile"
-    elif "claude" in model:
-        target_model_name = "llama-3.3-70b-versatile"
-    elif "flash" in model or "fast" in model:
-        target_model_name = "llama-3.1-8b-instant"
+    provider = os.getenv('LLM_PROVIDER', 'groq').lower()
+    
+    if provider == 'hf':
+        target_provider = "hf"
+        target_model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
+        if "gemini" in model or "gpt" in model or "claude" in model:
+             target_model_name = "mistralai/Mistral-7B-Instruct-v0.3"
+    elif provider == 'ollama':
+        target_provider = "ollama"
+        target_model_name = "llama3.1:8b"
+        if "gemini" in model or "gpt" in model or "claude" in model:
+            target_model_name = "qwen2.5:8b"
+    else:
+        # Default Groq logic
+        target_provider = "groq"
+        if "gemini" in model or "gpt" in model:
+            target_model_name = "llama-3.3-70b-versatile"
+        elif "claude" in model:
+            target_model_name = "llama-3.3-70b-versatile"
+        elif "flash" in model or "fast" in model:
+            target_model_name = "llama-3.1-8b-instant"
         
     # Construct prompt from messages
     # Messages are [{'role': 'user', 'content': '...'}, ...]

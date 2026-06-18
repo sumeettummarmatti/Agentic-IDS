@@ -1,0 +1,3 @@
+[submodule "AegisFlow"]
+	path = AegisFlow
+	url = https://github.com/ZenGX3/aegisflow.git

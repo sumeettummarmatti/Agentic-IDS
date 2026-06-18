@@ -14,6 +14,7 @@ from src.detector.preprocessor import Preprocessor
 from src.agents.attacker_agents import generate_balanced_synthetic_dataset
 from src.agents.defender_agent import DefenderRLAgent
 from src.council.llm_council_wrapper import ThreatAnalysisCouncil
+from src.human_feedback import HumanFeedbackLoop
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
@@ -21,6 +22,23 @@ logger = logging.getLogger(__name__)
 def parse_args():
     parser = argparse.ArgumentParser(description='Agentic IDS')
     parser.add_argument('--live-data', type=str, help='Path to custom Excel file for live monitoring simulation')
+    parser.add_argument(
+        '--human-review',
+        choices=['off', 'auto', 'always'],
+        default='auto',
+        help='Human feedback mode before mitigation: off, auto above threshold, or always'
+    )
+    parser.add_argument(
+        '--human-review-threshold',
+        type=float,
+        default=0.6,
+        help='Confidence threshold for --human-review auto'
+    )
+    parser.add_argument(
+        '--human-feedback-log',
+        default='logs/human_feedback.jsonl',
+        help='JSONL path for persisted analyst feedback'
+    )
     return parser.parse_args()
 
 def main():
@@ -39,6 +57,11 @@ def main():
     council = ThreatAnalysisCouncil()
     defender = DefenderRLAgent()
     preprocessor = Preprocessor()
+    feedback_loop = HumanFeedbackLoop(
+        mode=args.human_review,
+        confidence_threshold=args.human_review_threshold,
+        log_path=args.human_feedback_log
+    )
     
     # --- 2. DATA LOADING & TRAINING ---
     logger.info("\n[PHASE 1] Data & Training (Simulation)")
@@ -162,7 +185,7 @@ def main():
         cols = preprocessor.feature_names if preprocessor.feature_names else [f"F{k}" for k in range(len(flow_features))]
         flow_dict = dict(zip(cols, flow_features))
         
-        prediction = {'attack_type': attack_type, 'confidence': confidence}
+        prediction = {'attack_type': attack_type, 'confidence': float(confidence)}
         
         if confidence > 0.6: 
              logger.info("-> High confidence threat! Summoning Council...")
@@ -225,11 +248,38 @@ def main():
              }
              
              observation = defender.observe(perception)
-             action_result = defender.act(observation)
+             suggested_action = defender.act(observation)
+             feedback_decision = feedback_loop.review(
+                 flow_id=f"flow-{i + 1}",
+                 flow_data=flow_dict,
+                 prediction=prediction,
+                 council_result=council_result,
+                 suggested_action=suggested_action
+             )
+             
+             if feedback_decision.approved:
+                 action_result = {
+                     'action_id': feedback_decision.action_id,
+                     'action': feedback_decision.action,
+                     'status': feedback_decision.reason
+                 }
+                 if feedback_decision.reviewed:
+                     logger.info(f"HUMAN FEEDBACK: approved {feedback_decision.action}")
+                     logger.info(f"Analyst verdict: {feedback_decision.verdict}")
+             else:
+                 action_result = {
+                     'action_id': feedback_decision.action_id,
+                     'action': feedback_decision.action,
+                     'status': 'rejected_by_human'
+                 }
+                 logger.info("HUMAN FEEDBACK: mitigation rejected by analyst")
              
              logger.info(f"DEFENDER ACTION: {action_result['action']}")
              logger.info(f"Action Status: {action_result['status']}")
-             logger.info("-> Mitigation applied. Monitoring effect...")
+             if feedback_decision.approved:
+                 logger.info("-> Mitigation approved/applied. Monitoring effect...")
+             else:
+                 logger.info("-> No mitigation applied. Continuing monitoring...")
             
         else:
             logger.info("-> Benign/Low confidence. No action taken.")

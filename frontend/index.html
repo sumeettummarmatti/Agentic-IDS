@@ -1,0 +1,1243 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Agentic-IDS · Cyber Monitoring</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            sg: { red: '#e2001a', dark: '#a5001a', light: '#ff3344' },
+            cyber: {
+              bg:    '#0a0c0f',
+              panel: '#0f1218',
+              card:  '#141820',
+              border:'#1e2530',
+              muted: '#252d3a',
+            }
+          },
+          fontFamily: { sans: ['Inter','sans-serif'], mono: ['JetBrains Mono','monospace'] },
+          animation: {
+            'pulse-red': 'pulseRed 2s ease-in-out infinite',
+            'ping-slow':  'ping 3s cubic-bezier(0,0,0.2,1) infinite',
+            'slide-in':   'slideIn 0.25s ease',
+            'fade-in':    'fadeIn 0.3s ease',
+          },
+          keyframes: {
+            pulseRed: { '0%,100%':{ opacity:1 }, '50%':{ opacity:0.3 } },
+            slideIn:  { from:{ opacity:0, transform:'translateY(-6px)' }, to:{ opacity:1, transform:'translateY(0)' } },
+            fadeIn:   { from:{ opacity:0 }, to:{ opacity:1 } },
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background:#0a0c0f; color:#e2e8f0; }
+    ::-webkit-scrollbar { width:5px; height:5px; }
+    ::-webkit-scrollbar-track { background:#0a0c0f; }
+    ::-webkit-scrollbar-thumb { background:#1e2530; border-radius:3px; }
+    ::-webkit-scrollbar-thumb:hover { background:#2d3748; }
+    .tab-active { border-bottom:2px solid #e2001a; color:#fff; }
+    .tab-inactive { border-bottom:2px solid transparent; color:#64748b; }
+    .tab-inactive:hover { color:#94a3b8; }
+    .glow-red { box-shadow: 0 0 20px rgba(226,0,26,0.25); }
+    .glow-green { box-shadow: 0 0 12px rgba(16,185,129,0.3); }
+    .sg-gradient { background: linear-gradient(135deg, #e2001a 0%, #a5001a 100%); }
+    .card-hover { transition: border-color 0.2s, box-shadow 0.2s; }
+    .card-hover:hover { border-color: #e2001a44; box-shadow: 0 0 20px rgba(226,0,26,0.08); }
+    .action-block  { background:#0f1e1a; border:1px solid #10b98144; color:#10b981; }
+    .action-rate   { background:#1a1400; border:1px solid #f59e0b44; color:#f59e0b; }
+    .action-dpi    { background:#0a0f1e; border:1px solid #3b82f644; color:#3b82f6; }
+    .action-monitor{ background:#141820; border:1px solid #47556944; color:#64748b; }
+    .severity-critical { background:#3f0000; border:1px solid #e2001a; color:#ff6677; }
+    .severity-high  { background:#2a0a00; border:1px solid #ef4444aa; color:#f87171; }
+    .severity-medium{ background:#1a1400; border:1px solid #f59e0b88; color:#fbbf24; }
+    .severity-low   { background:#0a1400; border:1px solid #10b98166; color:#34d399; }
+    .log-threat { color:#f87171; }
+    .log-benign { color:#4b5563; }
+    .log-action { color:#60a5fa; }
+    .log-info   { color:#374151; }
+    .report-row { border-left: 3px solid transparent; }
+    .report-row:hover { background:#141820; }
+    .report-row.high  { border-left-color: #e2001a; }
+    .report-row.medium{ border-left-color: #f59e0b; }
+    .report-row.low   { border-left-color: #10b981; }
+    .detail-modal { backdrop-filter: blur(8px); }
+    @keyframes scanline {
+      0% { transform: translateY(-100%); }
+      100% { transform: translateY(100vh); }
+    }
+    .scanline::after {
+      content:''; position:fixed; top:0; left:0; right:0; height:2px;
+      background: linear-gradient(transparent, rgba(226,0,26,0.04), transparent);
+      animation: scanline 8s linear infinite; pointer-events:none; z-index:0;
+    }
+  </style>
+</head>
+<body class="h-full font-sans scanline">
+
+<!-- ═══════════════════ HEADER ═══════════════════ -->
+<header class="sticky top-0 z-50 flex items-center justify-between px-6 h-14 border-b border-cyber-border bg-cyber-panel/95 backdrop-blur-xl">
+  <div class="flex items-center gap-3">
+    <!-- SG-style red square logo -->
+    <div class="w-8 h-8 sg-gradient rounded flex items-center justify-center glow-red">
+      <span class="text-white font-bold text-xs font-mono">IDS</span>
+    </div>
+    <div>
+      <span class="font-bold text-sm tracking-tight text-white">Agentic<span class="text-sg-red">-IDS</span></span>
+      <span class="ml-2 text-[10px] px-2 py-0.5 rounded-full border border-sg-red/40 text-sg-red font-mono uppercase tracking-widest">Live</span>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <nav class="flex gap-0 h-14 items-end">
+    <button id="tab-dashboard" onclick="switchTab('dashboard')" class="tab-active px-5 pb-3 text-xs font-semibold uppercase tracking-widest transition-all">
+      Dashboard
+    </button>
+    <button id="tab-reports" onclick="switchTab('reports')" class="tab-inactive px-5 pb-3 text-xs font-semibold uppercase tracking-widest transition-all">
+      Threat Reports
+    </button>
+    <button id="tab-pipeline" onclick="switchTab('pipeline')" class="tab-inactive px-5 pb-3 text-xs font-semibold uppercase tracking-widest transition-all">
+      Pipeline
+    </button>
+  </nav>
+
+  <div class="flex items-center gap-4 text-xs text-slate-500 font-mono">
+    <div id="kafka-status" class="flex items-center gap-2">
+      <span id="kafka-dot" class="w-2 h-2 rounded-full bg-slate-600"></span>
+      <span id="kafka-label">Connecting…</span>
+    </div>
+    <div class="text-cyber-border">|</div>
+    <span id="clock" class="text-slate-400"></span>
+  </div>
+</header>
+
+<!-- ═══════════════════ MAIN CONTENT ═══════════════════ -->
+
+<!-- ─── TAB: DASHBOARD ─── -->
+<div id="view-dashboard" class="grid grid-cols-[300px_1fr] h-[calc(100vh-56px)]">
+
+  <!-- Sidebar -->
+  <aside class="border-r border-cyber-border overflow-y-auto p-4 flex flex-col gap-4 bg-cyber-panel">
+
+    <!-- Stats column -->
+    <div class="grid grid-cols-2 gap-2">
+      <div class="bg-cyber-card rounded-lg p-3 border border-cyber-border card-hover">
+        <div class="text-[9px] text-slate-500 uppercase tracking-widest mb-1">Flows</div>
+        <div id="s-flows" class="text-xl font-bold font-mono text-white">0</div>
+        <div class="text-[10px] text-slate-600">processed</div>
+      </div>
+      <div class="bg-cyber-card rounded-lg p-3 border border-sg-red/20 glow-red card-hover">
+        <div class="text-[9px] text-sg-red uppercase tracking-widest mb-1">Threats</div>
+        <div id="s-threats" class="text-xl font-bold font-mono text-sg-red">0</div>
+        <div class="text-[10px] text-slate-600">detected</div>
+      </div>
+      <div class="bg-cyber-card rounded-lg p-3 border border-cyber-border card-hover">
+        <div class="text-[9px] text-slate-500 uppercase tracking-widest mb-1">Mean Lat</div>
+        <div id="s-mean" class="text-lg font-bold font-mono text-yellow-400">—</div>
+        <div class="text-[10px] text-slate-600">ms</div>
+      </div>
+      <div class="bg-cyber-card rounded-lg p-3 border border-cyber-border card-hover">
+        <div class="text-[9px] text-slate-500 uppercase tracking-widest mb-1">P99</div>
+        <div id="s-p99" class="text-lg font-bold font-mono text-orange-400">—</div>
+        <div class="text-[10px] text-slate-600">ms</div>
+      </div>
+    </div>
+
+    <!-- Report file totals -->
+    <div class="bg-cyber-card rounded-lg border border-cyber-border p-3">
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-[9px] text-slate-500 uppercase tracking-widest">Reports on Disk</div>
+        <button onclick="clearCache()" class="text-[9px] text-sg-red hover:text-sg-light border border-sg-red/20 hover:border-sg-red/50 px-2 py-0.5 rounded transition-all">Clear</button>
+      </div>
+      <div id="report-totals" class="space-y-1 text-xs font-mono text-slate-400">
+        <div class="text-slate-600">Loading…</div>
+      </div>
+    </div>
+
+    <!-- Server list -->
+    <div class="bg-cyber-card rounded-lg border border-cyber-border p-3 flex-1">
+      <div class="flex items-center justify-between mb-3">
+        <span class="text-[9px] text-slate-500 uppercase tracking-widest">Capture Servers</span>
+        <span id="server-count" class="text-[9px] text-slate-600">0 online</span>
+      </div>
+      <div id="server-list" class="space-y-2">
+        <div class="text-xs text-slate-600 text-center py-4">No servers…</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <div class="overflow-y-auto p-4 flex flex-col gap-4">
+
+    <!-- World map -->
+    <div class="bg-cyber-card rounded-xl border border-cyber-border overflow-hidden relative" style="min-height:220px">
+      <div class="absolute top-3 left-4 text-[9px] text-slate-600 uppercase tracking-widest font-mono">Global Network Coverage</div>
+      <svg id="world-map" viewBox="0 0 900 220" xmlns="http://www.w3.org/2000/svg" class="w-full">
+        <defs>
+          <radialGradient id="mapGrad" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#1e293b" stop-opacity="0.3"/>
+            <stop offset="100%" stop-color="#0a0c0f" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <rect width="900" height="220" fill="url(#mapGrad)"/>
+        <!-- Grid lines -->
+        <line x1="0" y1="110" x2="900" y2="110" stroke="rgba(226,0,26,0.05)" stroke-width="1"/>
+        <line x1="450" y1="0" x2="450" y2="220" stroke="rgba(226,0,26,0.05)" stroke-width="1"/>
+        <!-- Continents (simplified) -->
+        <polygon points="70,55 220,55 220,175 155,195 70,145" fill="rgba(226,0,26,0.04)" stroke="rgba(226,0,26,0.15)" stroke-width="0.8"/>
+        <polygon points="155,195 220,195 240,218 155,220 125,210" fill="rgba(226,0,26,0.04)" stroke="rgba(226,0,26,0.15)" stroke-width="0.8"/>
+        <polygon points="260,50 360,50 380,120 330,150 260,130" fill="rgba(226,0,26,0.04)" stroke="rgba(226,0,26,0.15)" stroke-width="0.8"/>
+        <polygon points="350,125 395,125 415,210 355,215 325,175" fill="rgba(226,0,26,0.04)" stroke="rgba(226,0,26,0.15)" stroke-width="0.8"/>
+        <polygon points="390,28 780,28 780,155 390,155" fill="rgba(226,0,26,0.04)" stroke="rgba(226,0,26,0.15)" stroke-width="0.8"/>
+        <polygon points="660,170 760,170 760,210 675,215 640,195" fill="rgba(226,0,26,0.04)" stroke="rgba(226,0,26,0.15)" stroke-width="0.8"/>
+        <polygon points="790,70 860,70 870,130 800,135 785,100" fill="rgba(226,0,26,0.04)" stroke="rgba(226,0,26,0.15)" stroke-width="0.8"/>
+        <text x="10" y="113" fill="rgba(100,116,139,0.4)" font-size="8" font-family="JetBrains Mono">EQ</text>
+        <text x="10" y="55" fill="rgba(100,116,139,0.4)" font-size="8" font-family="JetBrains Mono">30°N</text>
+        <g id="map-dots"></g>
+      </svg>
+    </div>
+
+    <!-- Latency breakdown -->
+    <div class="grid grid-cols-2 gap-4">
+      <div class="bg-cyber-card rounded-xl border border-cyber-border p-4 card-hover">
+        <div class="text-[9px] text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2">
+          <span class="w-1 h-3 bg-sg-red rounded-full inline-block"></span>Latency Breakdown
+        </div>
+        <div class="space-y-3">
+          <div class="flex items-center gap-3">
+            <span class="w-9 text-[10px] font-mono text-slate-500">P50</span>
+            <div class="flex-1 h-1.5 bg-cyber-muted rounded-full overflow-hidden">
+              <div id="bar-p50" class="h-full rounded-full transition-all duration-700" style="width:0%;background:linear-gradient(90deg,#e2001a,#ff3344)"></div>
+            </div>
+            <span id="val-p50" class="w-16 text-right text-[10px] font-mono text-slate-300">—</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="w-9 text-[10px] font-mono text-slate-500">P95</span>
+            <div class="flex-1 h-1.5 bg-cyber-muted rounded-full overflow-hidden">
+              <div id="bar-p95" class="h-full rounded-full transition-all duration-700" style="width:0%;background:linear-gradient(90deg,#f59e0b,#ef4444)"></div>
+            </div>
+            <span id="val-p95" class="w-16 text-right text-[10px] font-mono text-slate-300">—</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="w-9 text-[10px] font-mono text-slate-500">P99</span>
+            <div class="flex-1 h-1.5 bg-cyber-muted rounded-full overflow-hidden">
+              <div id="bar-p99" class="h-full rounded-full transition-all duration-700" style="width:0%;background:linear-gradient(90deg,#ef4444,#dc2626)"></div>
+            </div>
+            <span id="val-p99" class="w-16 text-right text-[10px] font-mono text-slate-300">—</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="w-9 text-[10px] font-mono text-slate-500">Max</span>
+            <div class="flex-1 h-1.5 bg-cyber-muted rounded-full overflow-hidden">
+              <div id="bar-max" class="h-full rounded-full transition-all duration-700 bg-slate-600" style="width:0%"></div>
+            </div>
+            <span id="val-max" class="w-16 text-right text-[10px] font-mono text-slate-300">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live event log -->
+      <div class="bg-cyber-card rounded-xl border border-cyber-border p-4 card-hover">
+        <div class="text-[9px] text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+          <span class="w-1 h-3 bg-sg-red rounded-full inline-block"></span>Live Event Log
+        </div>
+        <div id="log-feed" class="h-36 overflow-y-auto font-mono text-[10px] leading-relaxed space-y-0.5">
+          <div class="log-info">— System ready. Click ▶ Monitor on a server —</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add server form (collapsible) -->
+    <details class="bg-cyber-card rounded-xl border border-cyber-border">
+      <summary class="px-4 py-3 cursor-pointer text-[10px] text-slate-400 uppercase tracking-widest hover:text-white transition-colors select-none flex items-center gap-2">
+        <span class="text-sg-red">＋</span> Add Capture Server
+      </summary>
+      <div class="px-4 pb-4 pt-2 grid grid-cols-2 gap-3">
+        <div>
+          <label class="text-[10px] text-slate-500 uppercase tracking-wide block mb-1">Geo Region</label>
+          <select id="geo-preset" class="w-full bg-cyber-muted border border-cyber-border rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-sg-red/60">
+            <option value="">— select region —</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-[10px] text-slate-500 uppercase tracking-wide block mb-1">Server ID</label>
+          <input id="server-id" type="text" placeholder="MUM-01" class="w-full bg-cyber-muted border border-cyber-border rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-sg-red/60 font-mono"/>
+        </div>
+        <div>
+          <label class="text-[10px] text-slate-500 uppercase tracking-wide block mb-1">Data Path (CSV)</label>
+          <input id="data-path" type="text" placeholder="/path/to/filtered.csv" class="w-full bg-cyber-muted border border-cyber-border rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-sg-red/60 font-mono"/>
+        </div>
+        <div>
+          <label class="text-[10px] text-slate-500 uppercase tracking-wide block mb-1">Flows/sec</label>
+          <input id="fps" type="number" value="50" class="w-full bg-cyber-muted border border-cyber-border rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-sg-red/60 font-mono"/>
+        </div>
+        <div class="col-span-2">
+          <button onclick="addServer()" class="w-full sg-gradient text-white text-xs font-bold py-2 rounded-lg hover:opacity-90 transition-all tracking-wider uppercase glow-red">
+            Deploy Server
+          </button>
+        </div>
+      </div>
+    </details>
+  </div>
+</div>
+
+<!-- ─── TAB: THREAT REPORTS ─── -->
+<div id="view-reports" class="hidden h-[calc(100vh-56px)] flex flex-col">
+
+  <!-- Toolbar -->
+  <div class="flex items-center justify-between px-5 py-3 border-b border-cyber-border bg-cyber-panel flex-shrink-0">
+    <div class="flex items-center gap-4">
+      <span class="text-[10px] text-slate-500 uppercase tracking-widest">Filter</span>
+      <select id="filter-server" onchange="loadReports()" class="bg-cyber-card border border-cyber-border text-xs text-white px-3 py-1.5 rounded-lg outline-none focus:border-sg-red/60 font-mono">
+        <option value="">All Servers</option>
+      </select>
+      <select id="filter-action" onchange="filterReports()" class="bg-cyber-card border border-cyber-border text-xs text-white px-3 py-1.5 rounded-lg outline-none focus:border-sg-red/60">
+        <option value="">All Actions</option>
+        <option>BLOCK_SOURCE</option>
+        <option>RATE_LIMIT</option>
+        <option>DEEP_PACKET_INSPECTION</option>
+        <option>MONITOR</option>
+      </select>
+      <select id="filter-severity" onchange="filterReports()" class="bg-cyber-card border border-cyber-border text-xs text-white px-3 py-1.5 rounded-lg outline-none focus:border-sg-red/60">
+        <option value="">All Severity</option>
+        <option>Critical</option><option>High</option><option>Medium</option><option>Low</option>
+      </select>
+    </div>
+    <div class="flex items-center gap-3">
+      <div id="live-badge" class="flex items-center gap-1.5 text-[10px] text-green-400 font-mono">
+        <span class="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse-red"></span>LIVE
+      </div>
+      <span id="report-count-label" class="text-[10px] text-slate-500 font-mono">0 records</span>
+      <button onclick="loadReports()" class="text-[10px] text-sg-red hover:text-sg-light border border-sg-red/30 hover:border-sg-red/60 px-3 py-1.5 rounded-lg transition-all">↺ Refresh</button>
+    </div>
+  </div>
+
+  <!-- Summary bar -->
+  <div id="report-summary" class="flex gap-3 px-5 py-3 border-b border-cyber-border bg-cyber-panel/60 flex-shrink-0 flex-wrap">
+    <div class="text-[10px] text-slate-600">Loading summary…</div>
+  </div>
+
+  <!-- Table + Detail split -->
+  <div class="flex flex-1 overflow-hidden">
+    <!-- Table -->
+    <div class="flex-1 overflow-y-auto">
+      <table class="w-full text-xs font-mono">
+        <thead class="sticky top-0 bg-cyber-panel border-b border-cyber-border">
+          <tr class="text-[9px] text-slate-500 uppercase tracking-wider">
+            <th class="text-left px-4 py-2.5 font-semibold">Time</th>
+            <th class="text-left px-2 py-2.5 font-semibold">Server</th>
+            <th class="text-left px-2 py-2.5 font-semibold">Flow ID</th>
+            <th class="text-left px-2 py-2.5 font-semibold">Attack Type</th>
+            <th class="text-left px-2 py-2.5 font-semibold">Confidence</th>
+            <th class="text-left px-2 py-2.5 font-semibold">RL Action</th>
+            <th class="text-left px-2 py-2.5 font-semibold">Severity</th>
+            <th class="text-left px-2 py-2.5 font-semibold">Latency</th>
+            <th class="text-left px-2 py-2.5 font-semibold">Council</th>
+          </tr>
+        </thead>
+        <tbody id="report-table-body" class="divide-y divide-cyber-border/40">
+          <tr><td colspan="9" class="text-center py-12 text-slate-600">Loading reports…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Detail panel -->
+    <div id="detail-panel" class="hidden w-96 border-l border-cyber-border overflow-y-auto bg-cyber-panel flex-shrink-0 p-4">
+      <div class="flex items-center justify-between mb-4">
+        <span class="text-[9px] text-slate-500 uppercase tracking-widest">Report Detail</span>
+        <button onclick="closeDetail()" class="text-slate-600 hover:text-white text-lg leading-none">×</button>
+      </div>
+      <div id="detail-content" class="space-y-4 text-xs"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── TAB: PIPELINE ─── -->
+<div id="view-pipeline" class="hidden h-[calc(100vh-56px)] overflow-y-auto">
+
+  <!-- Top toolbar -->
+  <div class="flex items-center justify-between px-5 py-3 border-b border-cyber-border bg-cyber-panel flex-shrink-0">
+    <div class="flex items-center gap-3">
+      <span class="text-[9px] text-slate-500 uppercase tracking-widest">Live Pipeline</span>
+      <div class="flex items-center gap-1.5 text-[10px] text-green-400 font-mono">
+        <span class="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse"></span>STREAMING
+      </div>
+    </div>
+    <div class="flex items-center gap-4 text-[10px] font-mono">
+      <div class="flex items-center gap-1.5"><span class="text-slate-500">Events</span><span id="pl-total" class="text-white font-bold">0</span></div>
+      <div class="flex items-center gap-1.5"><span class="text-purple-400">✓</span><span class="text-slate-500">Council done</span><span id="pl-council" class="text-purple-400 font-bold">0</span></div>
+      <div class="flex items-center gap-1.5"><span class="text-yellow-400">⚡</span><span class="text-slate-500">Defender acts</span><span id="pl-defender" class="text-yellow-400 font-bold">0</span></div>
+    </div>
+  </div>
+
+  <div class="p-5 grid grid-cols-3 gap-4">
+
+    <!-- Pipeline architecture strip -->
+    <div class="col-span-3 bg-cyber-card rounded-xl border border-cyber-border p-4">
+      <div class="text-[9px] text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2">
+        <span class="w-1 h-3 bg-sg-red rounded-full"></span>Pipeline Architecture
+      </div>
+      <div class="flex items-center gap-2 overflow-x-auto pb-2">
+        <div class="pipeline-stage flex-shrink-0 bg-cyber-muted rounded-lg p-3 border border-cyber-border text-center w-36">
+          <div class="text-[9px] text-sg-red uppercase tracking-widest mb-1">Stage 1</div>
+          <div class="text-xs font-bold text-white mb-1">Ingestion</div>
+          <div class="text-[9px] text-slate-500">Kafka Consumer</div>
+          <div class="text-[9px] text-slate-500 font-mono">batch=64</div>
+        </div>
+        <div class="text-sg-red/40 text-lg flex-shrink-0">→</div>
+        <div class="pipeline-stage flex-shrink-0 bg-cyber-muted rounded-lg p-3 border border-cyber-border text-center w-36">
+          <div class="text-[9px] text-blue-400 uppercase tracking-widest mb-1">Stage 2</div>
+          <div class="text-xs font-bold text-white mb-1">Detection</div>
+          <div class="text-[9px] text-slate-500">XGBoost + LSTM</div>
+          <div class="text-[9px] text-slate-500 font-mono">ensemble</div>
+        </div>
+        <div class="text-sg-red/40 text-lg flex-shrink-0">→</div>
+        <div class="pipeline-stage flex-shrink-0 bg-cyber-muted rounded-lg p-3 border border-purple-500/30 text-center w-36">
+          <div class="text-[9px] text-purple-400 uppercase tracking-widest mb-1">Stage 3</div>
+          <div class="text-xs font-bold text-white mb-1">LLM Council</div>
+          <div class="text-[9px] text-slate-500">3-Agent Voting</div>
+          <div class="text-[9px] text-slate-500 font-mono">sem=2</div>
+        </div>
+        <div class="text-sg-red/40 text-lg flex-shrink-0">→</div>
+        <div class="pipeline-stage flex-shrink-0 bg-cyber-muted rounded-lg p-3 border border-yellow-500/30 text-center w-36" style="box-shadow:0 0 14px rgba(234,179,8,0.15)">
+          <div class="text-[9px] text-yellow-400 uppercase tracking-widest mb-1">Stage 4</div>
+          <div class="text-xs font-bold text-white mb-1">Defender RL</div>
+          <div class="text-[9px] text-slate-500">PPO Agent</div>
+          <div class="text-[9px] text-slate-500 font-mono">dry_run=true</div>
+        </div>
+        <div class="text-sg-red/40 text-lg flex-shrink-0">→</div>
+        <div class="pipeline-stage flex-shrink-0 bg-cyber-muted rounded-lg p-3 border border-cyber-border text-center w-36">
+          <div class="text-[9px] text-green-400 uppercase tracking-widest mb-1">Output</div>
+          <div class="text-xs font-bold text-white mb-1">Action Reports</div>
+          <div class="text-[9px] text-slate-500">JSONL on disk</div>
+          <div class="text-[9px] text-slate-500 font-mono">per-server</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LEFT: Council agents status -->
+    <div class="col-span-1 flex flex-col gap-4">
+
+      <!-- Agent 1: Security Analyst -->
+      <div class="bg-cyber-card rounded-xl border border-red-500/20 p-4 card-hover">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="w-2 h-2 bg-red-400 rounded-full animate-pulse"></span>
+          <span class="text-[9px] text-slate-400 uppercase tracking-widest">Agent 1 · Security Analyst</span>
+        </div>
+        <div class="text-xs font-bold text-white mb-2">Security Analyst</div>
+        <div class="space-y-1 text-[10px] font-mono">
+          <div class="flex justify-between"><span class="text-slate-600">Backend</span><span class="text-red-300">LM Studio (local)</span></div>
+          <div class="flex justify-between"><span class="text-slate-600">Output</span><span class="text-slate-300">attack_type, severity</span></div>
+          <div class="flex justify-between"><span class="text-slate-600">Vote weight</span><span class="text-blue-400">50%</span></div>
+        </div>
+        <div class="mt-3 text-[9px] text-slate-600">Attack classification + severity + recommended action</div>
+      </div>
+
+      <!-- Agent 2: ML Engineer -->
+      <div class="bg-cyber-card rounded-xl border border-blue-500/20 p-4 card-hover">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></span>
+          <span class="text-[9px] text-slate-400 uppercase tracking-widest">Agent 2 · ML Engineer</span>
+        </div>
+        <div class="text-xs font-bold text-white mb-2">ML Engineer</div>
+        <div class="space-y-1 text-[10px] font-mono">
+          <div class="flex justify-between"><span class="text-slate-600">Backend</span><span class="text-blue-300">Ollama (local)</span></div>
+          <div class="flex justify-between"><span class="text-slate-600">Output</span><span class="text-slate-300">model_valid, fp_risk</span></div>
+          <div class="flex justify-between"><span class="text-slate-600">Vote weight</span><span class="text-blue-400">20%</span></div>
+          <div class="flex justify-between"><span class="text-slate-600">FP gate</span><span class="text-yellow-400">overrides to MONITOR</span></div>
+        </div>
+        <div class="mt-3 text-[9px] text-slate-600">Audits model decision validity — detects false positives</div>
+      </div>
+
+      <!-- Agent 3: Threat Intel -->
+      <div class="bg-cyber-card rounded-xl border border-purple-500/20 p-4 card-hover">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="w-2 h-2 bg-purple-400 rounded-full animate-pulse"></span>
+          <span class="text-[9px] text-slate-400 uppercase tracking-widest">Agent 3 · Threat Intel</span>
+        </div>
+        <div class="text-xs font-bold text-white mb-2">Threat Intel</div>
+        <div class="space-y-1 text-[10px] font-mono">
+          <div class="flex justify-between"><span class="text-slate-600">Backend</span><span class="text-purple-300">Groq (cloud)</span></div>
+          <div class="flex justify-between"><span class="text-slate-600">Output</span><span class="text-slate-300">signature, attribution</span></div>
+          <div class="flex justify-between"><span class="text-slate-600">Vote weight</span><span class="text-blue-400">30%</span></div>
+          <div class="flex justify-between"><span class="text-slate-600">Override</span><span class="text-purple-400">&gt;80% conf → type override</span></div>
+        </div>
+        <div class="mt-3 text-[9px] text-slate-600">Matches flow to known signatures (Mirai, SYN Flood…)</div>
+      </div>
+
+      <!-- Defender RL -->
+      <div class="bg-cyber-card rounded-xl border border-yellow-500/20 p-4 card-hover" style="box-shadow:0 0 12px rgba(234,179,8,0.1)">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="w-2 h-2 bg-yellow-400 rounded-full animate-pulse"></span>
+          <span class="text-[9px] text-yellow-500/80 uppercase tracking-widest">Stage 4 · Defender RL</span>
+        </div>
+        <div class="text-xs font-bold text-white mb-2">PPO RL Agent</div>
+        <div class="space-y-1 text-[10px] font-mono">
+          <div class="flex justify-between"><span class="text-slate-600">Algorithm</span><span class="text-yellow-300">Proximal Policy Optimisation</span></div>
+          <div class="flex justify-between"><span class="text-slate-600">Actions</span><span class="text-slate-300">BLOCK / RATE / DPI / MONITOR</span></div>
+          <div class="flex justify-between"><span class="text-slate-600">Mode</span><span class="text-yellow-400">dry_run (no kernel)</span></div>
+        </div>
+        <div class="mt-3 text-[9px] text-slate-600">Acts immediately on detected threats, then enriched by council</div>
+      </div>
+
+      <!-- Kernel Action Map -->
+      <div class="bg-cyber-card rounded-xl border border-cyber-border p-4">
+        <div class="text-[9px] text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+          <span class="w-1 h-3 bg-sg-red rounded-full"></span>Kernel Action Map (Dry-Run)
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-[9px] font-mono">
+          <div class="action-block rounded-lg p-2">
+            <div class="font-bold mb-0.5 text-[10px]">BLOCK_SOURCE</div>
+            <div class="text-green-500/70">iptables -I INPUT -s &lt;ip&gt; -j DROP</div>
+          </div>
+          <div class="action-rate rounded-lg p-2">
+            <div class="font-bold mb-0.5 text-[10px]">RATE_LIMIT</div>
+            <div class="text-yellow-500/70">hashlimit ≤50pkt/s</div>
+          </div>
+          <div class="action-dpi rounded-lg p-2">
+            <div class="font-bold mb-0.5 text-[10px]">DEEP_PKT_INS.</div>
+            <div class="text-blue-500/70">iptables -j NFQUEUE</div>
+          </div>
+          <div class="action-monitor rounded-lg p-2">
+            <div class="font-bold mb-0.5 text-[10px]">MONITOR</div>
+            <div class="text-slate-500/70">tcpdump passive</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Live event feed (col-span-2) -->
+    <div class="col-span-2 bg-cyber-card rounded-xl border border-cyber-border flex flex-col" style="max-height:calc(100vh - 220px)">
+      <div class="flex items-center justify-between px-4 py-3 border-b border-cyber-border flex-shrink-0">
+        <div class="flex items-center gap-2">
+          <span class="w-1 h-3 bg-purple-400 rounded-full"></span>
+          <span class="text-[9px] text-slate-400 uppercase tracking-widest">Live Council · Defender Interactions</span>
+        </div>
+        <div class="flex items-center gap-3 text-[9px] font-mono text-slate-600">
+          <span class="flex items-center gap-1"><span class="w-2 h-0.5 bg-purple-500 inline-block"></span>Council</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-0.5 bg-yellow-500 inline-block"></span>Defender</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-0.5 bg-red-700 inline-block"></span>Error</span>
+        </div>
+      </div>
+      <div id="pipeline-live-feed" class="flex-1 overflow-y-auto p-3 space-y-0.5 font-mono text-[10px]">
+        <div class="text-[10px] text-slate-600 text-center py-4">Waiting for pipeline events… Click &#x25b6; Monitor on a server first.</div>
+      </div>
+    </div>
+
+    <!-- Distributions row -->
+    <div class="col-span-2 bg-cyber-card rounded-xl border border-cyber-border p-4">
+      <div class="text-[9px] text-slate-500 uppercase tracking-widest mb-3">Action Distribution (from reports)</div>
+      <div id="action-dist" class="space-y-2">
+        <div class="text-[10px] text-slate-600">Load Threat Reports tab to populate…</div>
+      </div>
+    </div>
+
+    <div class="bg-cyber-card rounded-xl border border-cyber-border p-4">
+      <div class="text-[9px] text-slate-500 uppercase tracking-widest mb-3">Attack Type Distribution</div>
+      <div id="type-dist" class="space-y-2">
+        <div class="text-[10px] text-slate-600">Load Threat Reports tab to populate…</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ─── TOAST ─── -->
+<div id="toast" class="fixed bottom-5 right-5 z-50 hidden text-xs font-mono px-4 py-3 rounded-xl border animate-slide-in max-w-xs"></div>
+
+<script>
+// ═══════════════════ BASE URL ═══════════════════
+// If opened as file://, all fetch('/api/...') calls will fail.
+// Auto-detect and redirect to the backend server URL.
+const _BACKEND = 'http://localhost:5001';
+if (location.protocol === 'file:') {
+  document.body.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:20px;background:#0a0c0f;color:#e2e8f0;font-family:Inter,sans-serif">
+      <div style="width:48px;height:48px;background:linear-gradient(135deg,#e2001a,#a5001a);border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:14px;color:#fff;box-shadow:0 0 20px rgba(226,0,26,0.4)">IDS</div>
+      <h1 style="font-size:20px;font-weight:700;color:#fff">Agentic-IDS</h1>
+      <p style="color:#64748b;font-size:13px;text-align:center;max-width:400px">You opened this file directly.<br>Please access the dashboard through the backend server:</p>
+      <a href="${_BACKEND}" style="background:linear-gradient(135deg,#e2001a,#a5001a);color:#fff;padding:10px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:13px;letter-spacing:0.05em">Open Dashboard → ${_BACKEND}</a>
+      <p style="color:#374151;font-size:11px;font-family:monospace">Make sure the backend is running: python main.py --mode ui</p>
+    </div>`;
+} else {
+  // ── everything below only runs when served correctly ──
+}
+
+// ═══════════════════ STATE ═══════════════════
+let currentTab = 'dashboard';
+let knownServers = {};
+let presets = [];
+let logLines = 0;
+const MAX_LOG = 120;
+let monitoredSet = new Set();
+let allReports = [];
+let filteredReports = [];
+let reportSSE = null;
+let pipelineSSE = null;
+let actionSummary = {};
+let typeSummary = {};
+let pipelineEvents = [];   // ring-buffer for pipeline tab live feed
+const MAX_PIPELINE_EVENTS = 200;
+
+// ═══════════════════ CLOCK ═══════════════════
+function tickClock() {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('en-GB', {hour12:false});
+}
+setInterval(tickClock, 1000); tickClock();
+
+// ═══════════════════ TAB SWITCHING ═══════════════════
+function switchTab(tab) {
+  ['dashboard','reports','pipeline'].forEach(t => {
+    document.getElementById(`view-${t}`).classList.add('hidden');
+    document.getElementById(`tab-${t}`).className = 'tab-inactive px-5 pb-3 text-xs font-semibold uppercase tracking-widest transition-all';
+  });
+  document.getElementById(`view-${tab}`).classList.remove('hidden');
+  document.getElementById(`tab-${tab}`).className = 'tab-active px-5 pb-3 text-xs font-semibold uppercase tracking-widest transition-all';
+  currentTab = tab;
+
+  if (tab === 'reports') {
+    loadReports();
+    startReportStream();
+  }
+  if (tab === 'pipeline') {
+    startPipelineStream();
+  }
+}
+
+// ═══════════════════ BOOT ═══════════════════
+async function boot() {
+  await loadPresets();
+  startSSE();
+  syncMonitored();
+  loadReportTotals();
+  setInterval(syncMonitored, 5000);
+  setInterval(loadReportTotals, 15000);
+}
+
+async function clearCache() {
+  if (!confirm('Clear all cached report files? This resets threat counts.')) return;
+  try {
+    const r = await fetch('/api/cache', {method:'DELETE'});
+    const d = await r.json();
+    showToast(`✓ Cleared ${d.files_removed} report file(s)`, 'success');
+    allReports = []; filteredReports = [];
+    loadReportTotals();
+    if (currentTab === 'reports') { loadReports(); }
+  } catch(e) { showToast('Clear failed: ' + e.message, 'error'); }
+}
+
+// ═══════════════════ PRESETS ═══════════════════
+async function loadPresets() {
+  try {
+    const r = await fetch('/api/presets');
+    const d = await r.json();
+    presets = d.presets;
+    const sel = document.getElementById('geo-preset');
+    const fsel = document.getElementById('filter-server');
+    presets.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = JSON.stringify(p);
+      opt.textContent = `${p.label}`;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener('change', onPresetChange);
+  } catch(e) { console.warn('Presets load failed', e); }
+}
+
+function onPresetChange() {
+  const sel = document.getElementById('geo-preset');
+  if (!sel.value) return;
+  const p = JSON.parse(sel.value);
+  const existing = Object.keys(knownServers).filter(id => id.startsWith(p.id));
+  document.getElementById('server-id').value = `${p.id}-${String(existing.length+1).padStart(2,'0')}`;
+}
+
+// ═══════════════════ SERVERS ═══════════════════
+async function addServer() {
+  const preset = document.getElementById('geo-preset').value;
+  if (!preset) { showToast('Select a geo region first','error'); return; }
+  const p = JSON.parse(preset);
+  const sid = document.getElementById('server-id').value.trim();
+  if (!sid) { showToast('Enter a Server ID','error'); return; }
+  const payload = {
+    server_id: sid, geo_region: p.region, geo_label: p.label,
+    lat: p.lat, lon: p.lon, ip:'simulator', interface:'simulated',
+    data_path: document.getElementById('data-path').value.trim() || null,
+    flows_per_second: parseFloat(document.getElementById('fps').value) || 50,
+    n_servers_total: Object.keys(knownServers).length + 1,
+  };
+  try {
+    const r = await fetch('/api/servers', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json();
+    showToast(`✓ ${sid} registered → P${d.server.kafka_partition}`,'success');
+    addLog('action', `Server ${sid} registered (${p.label}) → partition ${d.server.kafka_partition}`);
+  } catch(e) { showToast(`Failed: ${e.message}`,'error'); }
+}
+
+async function removeServer(serverId) {
+  if (!confirm(`Deregister ${serverId}?`)) return;
+  await fetch(`/api/servers/${serverId}`, {method:'DELETE'});
+  monitoredSet.delete(serverId);
+  showToast(`${serverId} deregistered`,'success');
+  addLog('info', `${serverId} deregistered`);
+}
+
+async function toggleMonitor(serverId) {
+  const mon = monitoredSet.has(serverId);
+  try {
+    const r = await fetch(`/api/servers/${serverId}/monitor`, {method: mon ? 'DELETE' : 'POST'});
+    if (!r.ok) throw new Error(await r.text());
+    if (mon) {
+      monitoredSet.delete(serverId);
+      showToast(`⏸ Paused ${serverId}`,'success');
+      addLog('info', `⏸ Kafka partition PAUSED — ${serverId}`);
+    } else {
+      monitoredSet.add(serverId);
+      showToast(`▶ Monitoring ${serverId}`,'success');
+      addLog('action', `▶ Kafka partition RESUMED — ${serverId} flows entering pipeline`);
+    }
+    renderServerList(Object.values(knownServers));
+  } catch(e) { showToast(`Monitor toggle failed: ${e.message}`,'error'); }
+}
+
+async function syncMonitored() {
+  try {
+    const r = await fetch('/api/monitored');
+    const d = await r.json();
+    const prev = [...monitoredSet].sort().join();
+    monitoredSet = new Set(d.monitored);
+    if (prev !== [...monitoredSet].sort().join()) renderServerList(Object.values(knownServers));
+  } catch(e) {}
+}
+
+// ═══════════════════ SSE — STATS ═══════════════════
+function startSSE() {
+  const es = new EventSource('/api/stats/stream');
+  es.onmessage = e => { try { updateUI(JSON.parse(e.data)); } catch(err){} };
+  es.onerror = () => setTimeout(startSSE, 3000);
+}
+
+function updateUI(data) {
+  const servers = data.servers || [];
+  renderServerList(servers);
+  updateMapDots(servers);
+  document.getElementById('server-count').textContent = `${servers.length} online`;
+
+  const lat = (data.pipeline || {}).latency || {};
+  if (lat.count) {
+    document.getElementById('s-flows').textContent   = lat.count.toLocaleString();
+    // Use REAL threat count from backend instead of a fake 15% estimate
+    const realThreats = data.total_threats || (data.pipeline || {}).threats || 0;
+    document.getElementById('s-threats').textContent = realThreats.toLocaleString();
+    document.getElementById('s-mean').textContent    = lat.mean_ms ? lat.mean_ms.toFixed(0)+'ms' : '—';
+    document.getElementById('s-p99').textContent     = lat.p99_ms  ? lat.p99_ms.toFixed(0)+'ms'  : '—';
+    const mx = lat.max_ms || 1;
+    updateBar('p50', lat.median_ms, mx);
+    updateBar('p95', lat.p95_ms, mx);
+    updateBar('p99', lat.p99_ms, mx);
+    updateBar('max', lat.max_ms, mx);
+  }
+  const k = document.getElementById('kafka-dot');
+  k.className = 'w-2 h-2 rounded-full bg-green-400 shadow shadow-green-400/50 animate-pulse';
+  document.getElementById('kafka-label').textContent = `Kafka · ${data.active_servers||0} servers`;
+}
+
+function updateBar(key, val, max) {
+  const pct = max > 0 ? Math.min((val/max)*100, 100) : 0;
+  const bar = document.getElementById(`bar-${key}`);
+  const lbl = document.getElementById(`val-${key}`);
+  if (bar) bar.style.width = pct+'%';
+  if (lbl) lbl.textContent = val ? val.toFixed(0)+'ms' : '—';
+}
+
+// ═══════════════════ SERVER LIST ═══════════════════
+function renderServerList(servers) {
+  const list = document.getElementById('server-list');
+  if (!servers.length) {
+    list.innerHTML = '<div class="text-[10px] text-slate-600 text-center py-6">No servers registered.</div>';
+    return;
+  }
+  servers.forEach(s => { if (!knownServers[s.server_id]) addLog('info', `${s.server_id} online (${s.geo_label})`); knownServers[s.server_id] = s; });
+  list.innerHTML = servers.map(s => {
+    const mon = monitoredSet.has(s.server_id);
+    return `
+    <div class="flex items-center justify-between rounded-lg px-3 py-2 border ${mon ? 'border-green-500/30 bg-green-500/5' : 'border-cyber-border bg-cyber-muted'} transition-all animate-slide-in">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full ${s.alive ? (mon ? 'bg-green-400 shadow shadow-green-400/50 animate-pulse' : 'bg-blue-400') : 'bg-red-400'}"></span>
+        <div>
+          <div class="text-xs font-bold text-white font-mono">${s.server_id}</div>
+          <div class="text-[9px] text-slate-500">${s.geo_label}</div>
+        </div>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <span class="text-[9px] font-mono px-1.5 py-0.5 bg-cyber-card border border-cyber-border rounded text-blue-400">P${s.kafka_partition}</span>
+        <button onclick="toggleMonitor('${s.server_id}')" class="text-[9px] px-2 py-1 rounded border transition-all ${mon ? 'border-green-500/50 text-green-400 hover:border-red-500/50 hover:text-red-400' : 'border-sg-red/30 text-sg-red hover:border-sg-red/60'}">
+          ${mon ? '⏸' : '▶'}
+        </button>
+        <button onclick="removeServer('${s.server_id}')" class="text-[9px] px-1.5 py-1 rounded border border-red-900/40 text-red-700 hover:text-red-400 hover:border-red-500/40 transition-all">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Update filter dropdown in reports tab
+  const fsel = document.getElementById('filter-server');
+  const existing = new Set([...fsel.options].map(o => o.value));
+  servers.forEach(s => {
+    if (!existing.has(s.server_id)) {
+      const o = document.createElement('option');
+      o.value = s.server_id; o.textContent = s.server_id;
+      fsel.appendChild(o);
+    }
+  });
+}
+
+// ═══════════════════ WORLD MAP ═══════════════════
+function latLonToXY(lat, lon, w=900, h=220) {
+  return [((lon+180)/360)*w, ((90-lat)/180)*h];
+}
+
+function updateMapDots(servers) {
+  const g = document.getElementById('map-dots');
+  g.innerHTML = '';
+  servers.forEach(s => {
+    const [x,y] = latLonToXY(s.lat, s.lon);
+    const mon = monitoredSet.has(s.server_id);
+    const col = !s.alive ? '#ef4444' : mon ? '#10b981' : '#e2001a';
+
+    const ring = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    ring.setAttribute('cx',x); ring.setAttribute('cy',y); ring.setAttribute('r', mon?20:15);
+    ring.setAttribute('fill','none'); ring.setAttribute('stroke',col);
+    ring.setAttribute('stroke-width','1'); ring.setAttribute('opacity','0.3');
+    g.appendChild(ring);
+
+    const dot = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    dot.setAttribute('cx',x); dot.setAttribute('cy',y); dot.setAttribute('r', mon?7:5);
+    dot.setAttribute('fill',col); dot.setAttribute('class','cursor-pointer');
+    dot.style.filter = `drop-shadow(0 0 ${mon?'10px':'5px'} ${col})`;
+    dot.setAttribute('onclick',`toggleMonitor('${s.server_id}')`);
+    const title = document.createElementNS('http://www.w3.org/2000/svg','title');
+    title.textContent = `${s.server_id} — ${s.geo_label} [${mon?'click to pause':'click to monitor'}]`;
+    dot.appendChild(title);
+    g.appendChild(dot);
+
+    const lbl = document.createElementNS('http://www.w3.org/2000/svg','text');
+    lbl.setAttribute('x',x+9); lbl.setAttribute('y',y+4);
+    lbl.setAttribute('fill', mon?'#e2e8f0':'#94a3b8'); lbl.setAttribute('font-size','8');
+    lbl.setAttribute('font-family','JetBrains Mono, monospace');
+    lbl.textContent = s.server_id;
+    g.appendChild(lbl);
+  });
+}
+
+// ═══════════════════ LOG FEED ═══════════════════
+function addLog(type, msg) {
+  const feed = document.getElementById('log-feed');
+  const ts = new Date().toLocaleTimeString('en-GB',{hour12:false});
+  const div = document.createElement('div');
+  div.className = `log-${type} animate-fade-in`;
+  div.textContent = `[${ts}] ${msg}`;
+  feed.appendChild(div);
+  logLines++;
+  if (logLines > MAX_LOG) feed.removeChild(feed.firstChild);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+// ═══════════════════ REPORTS API ═══════════════════
+async function loadReportTotals() {
+  try {
+    const r = await fetch('/api/reports?limit=1');
+    const d = await r.json();
+    const el = document.getElementById('report-totals');
+    const totals = d.total_in_files || {};
+    if (!Object.keys(totals).length) {
+      el.innerHTML = '<div class="text-slate-600">No reports yet…</div>';
+      return;
+    }
+    el.innerHTML = Object.entries(totals).map(([sid, cnt]) =>
+      `<div class="flex justify-between"><span class="text-slate-500">${sid}</span><span class="text-sg-red">${cnt.toLocaleString()}</span></div>`
+    ).join('');
+  } catch(e) {}
+}
+
+async function loadReports() {
+  const server = document.getElementById('filter-server').value;
+  const url = '/api/reports?limit=200' + (server ? `&server=${server}` : '');
+  try {
+    const r = await fetch(url);
+    const d = await r.json();
+    allReports = d.records || [];
+    actionSummary = d.action_summary || {};
+    typeSummary = d.type_summary || {};
+    renderSummary(d);
+    filterReports();
+    updateDistributions(d);
+  } catch(e) { console.warn('Reports load failed',e); }
+}
+
+function renderSummary(d) {
+  const el = document.getElementById('report-summary');
+  const total = Object.values(d.total_in_files || {}).reduce((a,b)=>a+b, 0);
+  const actions = d.action_summary || {};
+  const colors = {BLOCK_SOURCE:'text-green-400', RATE_LIMIT:'text-yellow-400', DEEP_PACKET_INSPECTION:'text-blue-400', MONITOR:'text-slate-400'};
+  el.innerHTML = `
+    <div class="flex items-center gap-2 text-[10px] font-mono">
+      <span class="text-slate-600">Total on disk:</span>
+      <span class="text-white font-bold">${total.toLocaleString()}</span>
+    </div>
+    <div class="w-px h-4 bg-cyber-border"></div>
+    ${Object.entries(actions).map(([a,c]) =>
+      `<div class="flex items-center gap-1.5 text-[10px] font-mono">
+        <span class="w-1.5 h-1.5 rounded-full ${a==='BLOCK_SOURCE'?'bg-green-400':a==='RATE_LIMIT'?'bg-yellow-400':a==='DEEP_PACKET_INSPECTION'?'bg-blue-400':'bg-slate-600'}"></span>
+        <span class="${colors[a]||'text-slate-400'}">${a}: ${c}</span>
+      </div>`
+    ).join('')}
+  `;
+}
+
+function filterReports() {
+  const action = document.getElementById('filter-action').value;
+  const severity = document.getElementById('filter-severity').value;
+  filteredReports = allReports.filter(r => {
+    if (action && r.rl_action !== action) return false;
+    if (severity && r.council_severity !== severity) return false;
+    return true;
+  });
+  document.getElementById('report-count-label').textContent = `${filteredReports.length.toLocaleString()} records`;
+  renderReportTable(filteredReports);
+}
+
+function renderReportTable(records) {
+  const tbody = document.getElementById('report-table-body');
+  if (!records.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center py-12 text-slate-600 text-xs font-mono">No records match filter.</td></tr>';
+    return;
+  }
+
+  const actionBadge = a => {
+    const map = {BLOCK_SOURCE:'bg-green-900/40 text-green-400 border border-green-500/30', RATE_LIMIT:'bg-yellow-900/40 text-yellow-400 border border-yellow-500/30', DEEP_PACKET_INSPECTION:'bg-blue-900/40 text-blue-400 border border-blue-500/30', MONITOR:'bg-slate-800 text-slate-400 border border-slate-700'};
+    return `<span class="px-1.5 py-0.5 rounded text-[9px] font-bold ${map[a]||map.MONITOR}">${(a||'—').replace('_',' ')}</span>`;
+  };
+  const sevBadge = s => {
+    const map = {Critical:'bg-red-900/60 text-red-300', High:'bg-red-900/40 text-red-400', Medium:'bg-yellow-900/40 text-yellow-400', Low:'bg-green-900/30 text-green-400'};
+    return s && s !== 'Pending LLM enrichment' ? `<span class="px-1.5 py-0.5 rounded text-[9px] ${map[s]||'text-slate-500'}">${s}</span>` : '<span class="text-[9px] text-slate-600 italic">pending</span>';
+  };
+  const confBar = c => {
+    const pct = Math.round(c*100);
+    const col = pct > 85 ? '#e2001a' : pct > 65 ? '#f59e0b' : '#10b981';
+    return `<div class="flex items-center gap-1.5"><div class="w-12 h-1 bg-cyber-muted rounded-full overflow-hidden"><div style="width:${pct}%;background:${col}" class="h-full rounded-full"></div></div><span style="color:${col}">${pct}%</span></div>`;
+  };
+  const councilBadge = r => {
+    if (!r.agent_votes) return '<span class="text-[9px] text-slate-600">—</span>';
+    const votes = Object.values(r.agent_votes);
+    const ok = votes.filter(v=>v&&v!=='MONITOR'||true).length;
+    return `<span class="text-[9px] text-slate-400">${r.council_consensus ? (r.council_consensus*100).toFixed(0)+'%' : '—'}</span>`;
+  };
+
+  tbody.innerHTML = records.map((r,i) => {
+    const ts = r.timestamp_utc ? new Date(r.timestamp_utc).toLocaleTimeString('en-GB',{hour12:false}) : '—';
+    const sev = (r.council_severity||'').toLowerCase();
+    const flowShort = (r.flow_id||'').split('-').slice(0,2).join('-')+'…';
+    return `<tr class="report-row ${sev==='pending llm enrichment'?'':sev} cursor-pointer hover:bg-cyber-muted/50 transition-colors" onclick="showDetail(${i})">
+      <td class="px-4 py-2 text-[10px] text-slate-400">${ts}</td>
+      <td class="px-2 py-2"><span class="text-[10px] text-white">${r.server_id||'—'}</span></td>
+      <td class="px-2 py-2 text-[10px] text-slate-500 max-w-32 truncate">${r.flow_id||'—'}</td>
+      <td class="px-2 py-2 text-[10px] text-slate-300">${r.attack_type||'—'}</td>
+      <td class="px-2 py-2">${confBar(r.confidence||0)}</td>
+      <td class="px-2 py-2">${actionBadge(r.rl_action)}</td>
+      <td class="px-2 py-2">${sevBadge(r.council_severity)}</td>
+      <td class="px-2 py-2 text-[10px] text-slate-400">${r.latency_ms ? r.latency_ms.toFixed(0)+'ms' : '—'}</td>
+      <td class="px-2 py-2">${councilBadge(r)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ═══════════════════ DETAIL PANEL ═══════════════════
+function showDetail(idx) {
+  const r = filteredReports[idx];
+  if (!r) return;
+  const panel = document.getElementById('detail-panel');
+  const content = document.getElementById('detail-content');
+  panel.classList.remove('hidden');
+
+  const votePill = (agent, action) => {
+    if (!action) return '<span class="text-slate-600 text-[9px]">—</span>';
+    const col = action==='BLOCK_SOURCE'?'text-green-400':action==='RATE_LIMIT'?'text-yellow-400':action==='DEEP_PACKET_INSPECTION'?'text-blue-400':'text-slate-400';
+    return `<span class="${col} text-[9px] font-bold">${action}</span>`;
+  };
+
+  const votes = r.agent_votes || {};
+  const cmds = (r.command_comments||[]).join('\n') || '(no commands — MONITOR or BENIGN)';
+  const indicators = (r.all_indicators||[]);
+
+  content.innerHTML = `
+    <div class="border border-sg-red/20 rounded-lg p-3 bg-sg-red/5">
+      <div class="text-[9px] text-sg-red uppercase tracking-widest mb-2">Verdict</div>
+      <div class="text-sm font-bold text-white mb-0.5">${r.rl_action||'—'}</div>
+      <div class="text-[10px] text-slate-400">${r.attack_type||'Unknown'} · ${r.server_id} · ${r.geo_label||''}</div>
+    </div>
+
+    <div class="space-y-1.5 text-[10px]">
+      <div class="flex justify-between border-b border-cyber-border pb-1">
+        <span class="text-slate-500">Confidence</span>
+        <span class="text-white font-mono">${((r.confidence||0)*100).toFixed(1)}%</span>
+      </div>
+      <div class="flex justify-between border-b border-cyber-border pb-1">
+        <span class="text-slate-500">Severity</span>
+        <span class="${r.council_severity==='High'||r.council_severity==='Critical'?'text-red-400':r.council_severity==='Medium'?'text-yellow-400':'text-green-400'}">${r.council_severity||'—'}</span>
+      </div>
+      <div class="flex justify-between border-b border-cyber-border pb-1">
+        <span class="text-slate-500">Signature</span>
+        <span class="text-purple-400">${r.signature_match||'—'}</span>
+      </div>
+      <div class="flex justify-between border-b border-cyber-border pb-1">
+        <span class="text-slate-500">Threat Actor</span>
+        <span class="text-slate-300">${r.threat_actor_type||'—'}</span>
+      </div>
+      <div class="flex justify-between border-b border-cyber-border pb-1">
+        <span class="text-slate-500">FP Risk</span>
+        <span class="${r.false_positive_risk==='High'?'text-red-400':r.false_positive_risk==='Medium'?'text-yellow-400':'text-green-400'}">${r.false_positive_risk||'—'}</span>
+      </div>
+      <div class="flex justify-between border-b border-cyber-border pb-1">
+        <span class="text-slate-500">Council Consensus</span>
+        <span class="text-white">${r.council_consensus ? (r.council_consensus*100).toFixed(0)+'%' : '—'}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-slate-500">Latency</span>
+        <span class="text-white font-mono">${r.latency_ms ? r.latency_ms.toFixed(0)+'ms' : '—'}</span>
+      </div>
+    </div>
+
+    ${Object.keys(votes).length ? `
+    <div>
+      <div class="text-[9px] text-slate-500 uppercase tracking-widest mb-2">Agent Votes</div>
+      <div class="grid grid-cols-3 gap-2 text-[10px] text-center">
+        <div class="bg-cyber-muted rounded-lg p-2">
+          <div class="text-[8px] text-slate-600 mb-1">ANALYST</div>
+          ${votePill('analyst', votes.analyst)}
+        </div>
+        <div class="bg-cyber-muted rounded-lg p-2">
+          <div class="text-[8px] text-slate-600 mb-1">ENGINEER</div>
+          ${votePill('engineer', votes.engineer)}
+        </div>
+        <div class="bg-cyber-muted rounded-lg p-2">
+          <div class="text-[8px] text-slate-600 mb-1">INTEL</div>
+          ${votePill('intel', votes.intel)}
+        </div>
+      </div>
+    </div>` : ''}
+
+    ${indicators.length ? `
+    <div>
+      <div class="text-[9px] text-slate-500 uppercase tracking-widest mb-2">Indicators (${indicators.length})</div>
+      <ul class="space-y-1">
+        ${indicators.map(i=>`<li class="text-[9px] text-slate-400 flex gap-2"><span class="text-sg-red flex-shrink-0">›</span><span>${i}</span></li>`).join('')}
+      </ul>
+    </div>` : ''}
+
+    <div>
+      <div class="text-[9px] text-slate-500 uppercase tracking-widest mb-2">Kernel Command</div>
+      <pre class="bg-black/40 border border-cyber-border rounded-lg p-3 text-[9px] font-mono text-green-400/80 whitespace-pre-wrap overflow-x-auto">${cmds}</pre>
+    </div>
+
+    <div>
+      <div class="text-[9px] text-slate-500 uppercase tracking-widest mb-1">Flow ID</div>
+      <div class="font-mono text-[9px] text-slate-500 break-all">${r.flow_id||'—'}</div>
+    </div>
+  `;
+}
+
+function closeDetail() {
+  document.getElementById('detail-panel').classList.add('hidden');
+}
+
+// ═══════════════════ LIVE REPORT STREAM ═══════════════════
+function startReportStream() {
+  if (reportSSE) return;
+  reportSSE = new EventSource('/api/reports/stream');
+  reportSSE.onmessage = e => {
+    try {
+      const rec = JSON.parse(e.data);
+      if (rec._type === 'council_update') {
+        // This is a patch from the LLM council completing in the background.
+        // Find the existing base record written by the Defender and update it.
+        const existing = allReports.find(r => r.flow_id === rec.flow_id);
+        if (existing) {
+          Object.assign(existing, rec);
+          filterReports(); // re-render table to show new severity/council
+        }
+      } else {
+        // Prepend new base record to top of allReports
+        allReports.unshift(rec);
+        if (allReports.length > 500) allReports.pop();
+        filterReports();
+        addLog('threat', `[LIVE] ${rec.server_id} · ${rec.attack_type} → ${rec.rl_action}`);
+      }
+    } catch(err) {}
+  };
+  reportSSE.onerror = () => {
+    reportSSE = null;
+    setTimeout(startReportStream, 5000);
+  };
+}
+
+// ═══════════════════ LIVE PIPELINE STREAM ═══════════════════
+function startPipelineStream() {
+  if (pipelineSSE) return;
+  pipelineSSE = new EventSource('/api/pipeline/stream');
+  pipelineSSE.onmessage = e => {
+    try {
+      const ev = JSON.parse(e.data);
+      pipelineEvents.unshift(ev);
+      if (pipelineEvents.length > MAX_PIPELINE_EVENTS) pipelineEvents.pop();
+      renderPipelineFeed();
+    } catch(err) {}
+  };
+  pipelineSSE.onerror = () => {
+    pipelineSSE = null;
+    setTimeout(startPipelineStream, 5000);
+  };
+}
+
+function renderPipelineFeed() {
+  const feed = document.getElementById('pipeline-live-feed');
+  if (!feed) return;
+  if (!pipelineEvents.length) {
+    feed.innerHTML = '<div class="text-[10px] text-slate-600 text-center py-4">Waiting for threats to flow through the pipeline…</div>';
+    return;
+  }
+
+  // Count defender actions live
+  const actionCounts = {};
+  pipelineEvents.forEach(ev => {
+    if (ev.stage === 'defender' && ev.action) {
+      actionCounts[ev.action] = (actionCounts[ev.action] || 0) + 1;
+    }
+  });
+
+  // Update live counter badges
+  const liveTotal = document.getElementById('pl-total');
+  const liveCouncil = document.getElementById('pl-council');
+  const liveDefender = document.getElementById('pl-defender');
+  if (liveTotal) liveTotal.textContent = pipelineEvents.length;
+  if (liveCouncil) liveCouncil.textContent = pipelineEvents.filter(e=>e.stage==='council'&&e.event==='complete').length;
+  if (liveDefender) liveDefender.textContent = pipelineEvents.filter(e=>e.stage==='defender').length;
+
+  const actionColors = {
+    BLOCK_SOURCE: 'text-green-400 bg-green-900/30 border-green-500/30',
+    RATE_LIMIT: 'text-yellow-400 bg-yellow-900/30 border-yellow-500/30',
+    DEEP_PACKET_INSPECTION: 'text-blue-400 bg-blue-900/30 border-blue-500/30',
+    MONITOR: 'text-slate-400 bg-slate-800/60 border-slate-600/30',
+    ALLOW: 'text-slate-600 bg-slate-900/40 border-slate-700/20',
+  };
+  const eventIcon = ev => {
+    if (ev.stage === 'defender') return '⚡';
+    if (ev.event === 'complete') return '✓';
+    if (ev.event === 'enriching') return '⟳';
+    if (ev.event === 'queued') return '↓';
+    if (ev.event === 'error') return '✗';
+    return '·';
+  };
+  const eventColor = ev => {
+    if (ev.stage === 'defender') return ev.action === 'BLOCK_SOURCE' ? 'border-l-green-500' : ev.action === 'RATE_LIMIT' ? 'border-l-yellow-500' : ev.action === 'DEEP_PACKET_INSPECTION' ? 'border-l-blue-500' : 'border-l-slate-600';
+    if (ev.event === 'complete') return 'border-l-purple-500';
+    if (ev.event === 'enriching') return 'border-l-purple-800';
+    if (ev.event === 'error') return 'border-l-red-700';
+    return 'border-l-slate-700';
+  };
+
+  feed.innerHTML = pipelineEvents.slice(0, 80).map(ev => {
+    const ts = ev.ts ? new Date(ev.ts).toLocaleTimeString('en-GB',{hour12:false}) : '—';
+    const icon = eventIcon(ev);
+    const borderCol = eventColor(ev);
+    let detail = '';
+    if (ev.stage === 'defender') {
+      const acol = actionColors[ev.action] || actionColors.MONITOR;
+      detail = `<span class="px-1.5 py-0.5 rounded border text-[9px] font-bold ${acol}">${ev.action||'—'}</span>`;
+      if (ev.confidence) detail += ` <span class="text-slate-500">${ev.confidence}%</span>`;
+      if (ev.latency_ms) detail += ` <span class="text-slate-600">${ev.latency_ms}ms</span>`;
+    } else if (ev.event === 'complete') {
+      const votes = ev.agent_votes || {};
+      const voteHtml = Object.entries(votes).map(([role,a]) => {
+        const ac = a==='BLOCK_SOURCE'?'text-green-400':a==='RATE_LIMIT'?'text-yellow-400':a==='DEEP_PACKET_INSPECTION'?'text-blue-400':'text-slate-500';
+        return `<span class="${ac} text-[8px]">${role[0].toUpperCase()}:${a.replace('_',' ')}</span>`;
+      }).join(' ');
+      detail = voteHtml + (ev.signature ? ` <span class="text-purple-400/70 text-[8px]">${ev.signature}</span>` : '');
+    } else if (ev.event === 'enriching') {
+      detail = '<span class="text-purple-400/60 text-[9px]">LLM council analyzing…</span>';
+    } else if (ev.event === 'error') {
+      detail = `<span class="text-red-500/70 text-[9px]">${ev.error||'err'}</span>`;
+    } else if (ev.event === 'queued') {
+      detail = `<span class="text-slate-500 text-[9px]">${ev.confidence}% confidence</span>`;
+    }
+    return `<div class="border-l-2 ${borderCol} pl-2 py-1 flex items-start gap-2">
+      <span class="text-[9px] text-slate-600 font-mono flex-shrink-0 w-14">${ts}</span>
+      <span class="text-[9px] w-3 flex-shrink-0 ${ev.stage==='defender'?'text-yellow-400':ev.event==='complete'?'text-purple-400':ev.event==='error'?'text-red-500':'text-slate-500'}">${icon}</span>
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-1.5 flex-wrap">
+          <span class="text-[10px] font-bold ${ev.stage==='defender'?'text-yellow-300':'text-slate-300'}">${ev.stage==='defender'?'Defender':'Council'}</span>
+          <span class="text-[9px] text-slate-500">${ev.server_id||''}</span>
+          <span class="text-[9px] text-slate-400">${ev.attack_type||''}</span>
+        </div>
+        <div class="mt-0.5 flex items-center gap-1.5 flex-wrap">${detail}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ═══════════════════ DISTRIBUTIONS (PIPELINE TAB) ═══════════════════
+function updateDistributions(d) {
+  const actionEl = document.getElementById('action-dist');
+  const typeEl = document.getElementById('type-dist');
+  const ac = d.action_summary || {};
+  const tc = d.type_summary || {};
+  const total = Object.values(ac).reduce((a,b)=>a+b,0);
+
+  const colA = {BLOCK_SOURCE:'bg-green-500', RATE_LIMIT:'bg-yellow-500', DEEP_PACKET_INSPECTION:'bg-blue-500', MONITOR:'bg-slate-500'};
+  actionEl.innerHTML = Object.entries(ac).map(([a,c]) => {
+    const pct = total ? Math.round(c/total*100) : 0;
+    return `<div class="flex items-center gap-2 text-[10px]">
+      <span class="w-20 font-mono text-slate-400 flex-shrink-0 truncate">${a.replace('_',' ')}</span>
+      <div class="flex-1 h-1.5 bg-cyber-muted rounded-full overflow-hidden">
+        <div class="h-full ${colA[a]||'bg-slate-500'} rounded-full transition-all" style="width:${pct}%"></div>
+      </div>
+      <span class="text-slate-300 w-8 text-right">${pct}%</span>
+    </div>`;
+  }).join('');
+
+  const ttotal = Object.values(tc).reduce((a,b)=>a+b,0);
+  typeEl.innerHTML = Object.entries(tc).slice(0,6).map(([t,c]) => {
+    const pct = ttotal ? Math.round(c/ttotal*100) : 0;
+    return `<div class="flex items-center gap-2 text-[10px]">
+      <span class="w-16 font-mono text-slate-400 flex-shrink-0 truncate">${t}</span>
+      <div class="flex-1 h-1.5 bg-cyber-muted rounded-full overflow-hidden">
+        <div class="h-full bg-sg-red rounded-full transition-all" style="width:${pct}%"></div>
+      </div>
+      <span class="text-slate-300 w-8 text-right">${pct}%</span>
+    </div>`;
+  }).join('');
+}
+
+// ═══════════════════ TOAST ═══════════════════
+function showToast(msg, type='success') {
+  const t = document.getElementById('toast');
+  const styles = {
+    success: 'border-green-500/40 text-green-300 bg-cyber-card',
+    error:   'border-sg-red/50 text-red-300 bg-cyber-card',
+  };
+  t.className = `fixed bottom-5 right-5 z-50 text-xs font-mono px-4 py-3 rounded-xl border animate-slide-in max-w-xs ${styles[type]||styles.success}`;
+  t.textContent = msg;
+  t.classList.remove('hidden');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.add('hidden'), 3500);
+}
+
+boot();
+</script>
+</body>
+</html>

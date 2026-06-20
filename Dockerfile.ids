@@ -1,0 +1,33 @@
+# Dockerfile.ids
+# ─────────────────────────────────────────────────────────────
+# Full IDS pipeline container — runs main.py --mode production.
+# Reads flows from Kafka raw-flows topic, runs ML + LLM council,
+# writes decisions back to Kafka and exposes the dashboard at :5001.
+# ─────────────────────────────────────────────────────────────
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# System deps for torch / sklearn / librdkafka python binding
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python deps (full stack)
+COPY backend/requirements.txt requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Source code
+COPY backend/src/   src/
+COPY backend/main.py .
+COPY backend/config/ config/
+
+# Data & models are mounted from host via docker-compose volumes
+# (data/ and models/ are too large to bake into the image)
+
+# Expose Server Manager dashboard port
+EXPOSE 5001
+
+# Default: production mode (reads live Kafka flows)
+CMD ["python", "main.py", "--mode", "production"]

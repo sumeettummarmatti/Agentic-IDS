@@ -1,0 +1,29 @@
+# Dockerfile.server
+# ─────────────────────────────────────────────────────────────
+# Lightweight image for simulated geo-capture servers.
+# Runs server_simulator.py — reads dataset slice, publishes to Kafka.
+# Each container = one geo-server (MUM-01, USE-01, LON-01, etc.)
+#
+# Built by docker-compose — no manual build needed.
+# ─────────────────────────────────────────────────────────────
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install only what the simulator needs (much smaller than full IDS stack)
+COPY backend/requirements-server.txt requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy only the modules needed by server_simulator.py
+COPY backend/src/kafka/       src/kafka/
+COPY backend/src/simulation/  src/simulation/
+COPY backend/src/ingestion/   src/ingestion/
+COPY backend/src/__init__.py  src/__init__.py
+
+# Entry point
+COPY backend/server_simulator.py server_simulator.py
+
+# Dataset is bind-mounted at runtime (see docker-compose volumes)
+# ENV vars are injected by docker-compose per-service
+
+CMD ["python", "server_simulator.py"]

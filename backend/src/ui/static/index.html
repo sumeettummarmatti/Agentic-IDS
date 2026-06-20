@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agentic-IDS · Server Manager</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg:        #090d1a;
+      --bg2:       #0d1526;
+      --bg3:       #111c35;
+      --border:    rgba(99,179,237,0.12);
+      --accent:    #3b82f6;
+      --accent2:   #06b6d4;
+      --green:     #10b981;
+      --red:       #ef4444;
+      --yellow:    #f59e0b;
+      --text:      #e2e8f0;
+      --text-dim:  #64748b;
+      --card-glow: rgba(59,130,246,0.06);
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── Header ── */
+    header {
+      background: linear-gradient(135deg, #0a1628 0%, #0d1f3c 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 64px;
+      position: sticky; top: 0; z-index: 100;
+      backdrop-filter: blur(12px);
+    }
+    .logo {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 1.15rem; font-weight: 700;
+      letter-spacing: -0.3px;
+    }
+    .logo-icon {
+      width: 34px; height: 34px; border-radius: 8px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      display: grid; place-items: center; font-size: 1rem;
+    }
+    .badge {
+      padding: 2px 8px; border-radius: 20px; font-size: 0.65rem;
+      font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;
+      background: rgba(16,185,129,0.15); color: var(--green);
+      border: 1px solid rgba(16,185,129,0.3);
+    }
+    .header-right { display: flex; align-items: center; gap: 16px; }
+    .kafka-status {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 0.78rem; color: var(--text-dim);
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim); }
+    .dot.online { background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite; }
+
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+    /* ── Layout ── */
+    .main { display: grid; grid-template-columns: 360px 1fr; height: calc(100vh - 64px); }
+    .sidebar { border-right: 1px solid var(--border); overflow-y: auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1.5rem; }
+    .content { overflow-y: auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1.5rem; }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.2s;
+    }
+    .card::before {
+      content: ''; position: absolute; inset: 0;
+      background: var(--card-glow);
+      opacity: 0; transition: opacity 0.2s;
+      pointer-events: none;
+    }
+    .card:hover::before { opacity: 1; }
+    .card:hover { border-color: rgba(99,179,237,0.25); }
+
+    .card-title {
+      font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 1px; color: var(--text-dim); margin-bottom: 1rem;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .card-title span { color: var(--accent); }
+
+    /* ── Form ── */
+    .form-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 0.9rem; }
+    label { font-size: 0.72rem; font-weight: 500; color: var(--text-dim); letter-spacing: 0.3px; }
+    input, select {
+      background: var(--bg3); border: 1px solid var(--border);
+      border-radius: 8px; padding: 8px 12px;
+      color: var(--text); font-size: 0.82rem; font-family: inherit;
+      outline: none; transition: border-color 0.2s, box-shadow 0.2s;
+      width: 100%;
+    }
+    input:focus, select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
+    }
+    select option { background: var(--bg3); }
+
+    .btn {
+      padding: 9px 18px; border-radius: 8px; font-size: 0.82rem;
+      font-weight: 600; cursor: pointer; border: none;
+      transition: all 0.15s; width: 100%; font-family: inherit;
+      display: flex; align-items: center; justify-content: center; gap: 7px;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), #2563eb);
+      color: white;
+      box-shadow: 0 4px 15px rgba(59,130,246,0.3);
+    }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(59,130,246,0.4); }
+    .btn-danger {
+      background: rgba(239,68,68,0.12); color: var(--red);
+      border: 1px solid rgba(239,68,68,0.3); padding: 5px 10px;
+      width: auto; font-size: 0.72rem;
+    }
+    .btn-danger:hover { background: rgba(239,68,68,0.2); }
+
+    /* ── World Map (SVG) ── */
+    #world-map-container {
+      position: relative;
+      background: linear-gradient(135deg, #060d1e 0%, #0a1628 100%);
+      border-radius: 12px; border: 1px solid var(--border);
+      overflow: hidden; min-height: 280px;
+    }
+    #world-map-container svg { width: 100%; height: 280px; }
+    .map-server-dot {
+      cursor: pointer; transition: r 0.2s;
+    }
+    .map-server-dot:hover { r: 9; }
+    .map-grid-label {
+      font-size: 10px; fill: rgba(100,116,139,0.5);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* ── Server List ── */
+    #server-list { display: flex; flex-direction: column; gap: 10px; }
+    .server-item {
+      background: var(--bg3); border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px 14px;
+      display: flex; align-items: center; justify-content: space-between;
+      transition: all 0.2s; animation: slideIn 0.3s ease;
+    }
+    @keyframes slideIn { from { opacity:0; transform: translateY(-8px); } to { opacity:1; transform: translateY(0); } }
+    .server-item:hover { border-color: rgba(99,179,237,0.25); background: var(--bg2); }
+    .server-left { display: flex; align-items: center; gap: 10px; }
+    .server-status { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .server-status.alive { background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite; }
+    .server-status.dead { background: var(--red); }
+    .server-name { font-size: 0.82rem; font-weight: 600; }
+    .server-geo { font-size: 0.7rem; color: var(--text-dim); }
+    .server-right { display: flex; align-items: center; gap: 8px; }
+    .partition-badge {
+      font-family: 'JetBrains Mono', monospace; font-size: 0.65rem;
+      padding: 2px 7px; background: rgba(59,130,246,0.12);
+      border: 1px solid rgba(59,130,246,0.25); border-radius: 4px; color: var(--accent);
+    }
+
+    /* ── Stats Grid ── */
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .stat-card {
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+      padding: 14px; display: flex; flex-direction: column; gap: 6px;
+    }
+    .stat-label { font-size: 0.65rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 500; }
+    .stat-value { font-size: 1.6rem; font-weight: 700; font-family: 'JetBrains Mono', monospace; line-height: 1; }
+    .stat-value.green { color: var(--green); }
+    .stat-value.red { color: var(--red); }
+    .stat-value.blue { color: var(--accent); }
+    .stat-value.yellow { color: var(--yellow); }
+    .stat-sub { font-size: 0.67rem; color: var(--text-dim); }
+
+    /* ── Latency Chart ── */
+    .latency-bars { display: flex; flex-direction: column; gap: 8px; }
+    .lat-row { display: flex; align-items: center; gap: 10px; }
+    .lat-label { font-size: 0.7rem; color: var(--text-dim); width: 40px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; }
+    .lat-bar-wrap { flex: 1; height: 8px; background: var(--bg3); border-radius: 4px; overflow: hidden; }
+    .lat-bar { height: 100%; border-radius: 4px; transition: width 0.5s ease; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+    .lat-val { font-size: 0.7rem; color: var(--text); font-family: 'JetBrains Mono', monospace; width: 55px; text-align: right; flex-shrink: 0; }
+
+    /* ── Log Feed ── */
+    #log-feed {
+      background: var(--bg3); border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px; height: 200px; overflow-y: auto;
+      font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; line-height: 1.7;
+    }
+    .log-entry { animation: fadeIn 0.3s ease; }
+    @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+    .log-threat { color: var(--red); }
+    .log-benign { color: var(--text-dim); }
+    .log-action { color: var(--accent2); }
+    .log-info   { color: var(--text-dim); }
+
+    /* ── Mode Toggle ── */
+    .mode-toggle { display: flex; gap: 8px; }
+    .mode-btn {
+      flex: 1; padding: 8px; border-radius: 8px; font-size: 0.75rem;
+      font-weight: 600; cursor: pointer; border: 1px solid var(--border);
+      background: transparent; color: var(--text-dim); transition: all 0.15s; font-family: inherit;
+    }
+    .mode-btn.active {
+      background: rgba(59,130,246,0.15); color: var(--accent);
+      border-color: rgba(59,130,246,0.4);
+    }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed; bottom: 24px; right: 24px;
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px 18px;
+      font-size: 0.8rem; transform: translateY(20px); opacity: 0;
+      transition: all 0.3s; z-index: 999; max-width: 300px;
+    }
+    #toast.show { transform: translateY(0); opacity: 1; }
+    #toast.success { border-color: rgba(16,185,129,0.4); color: var(--green); }
+    #toast.error { border-color: rgba(239,68,68,0.4); color: var(--red); }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">🛡️</div>
+    <span>Agentic-IDS</span>
+    <span class="badge">Live</span>
+  </div>
+  <div class="header-right">
+    <div class="kafka-status">
+      <div class="dot" id="kafka-dot"></div>
+      <span id="kafka-label">Kafka: checking…</span>
+    </div>
+  </div>
+</header>
+
+<!-- ── Main Layout ── -->
+<div class="main">
+
+  <!-- ── Left Sidebar ── -->
+  <div class="sidebar">
+
+    <!-- Add Server Form -->
+    <div class="card">
+      <div class="card-title">⊕ <span>Add Capture Server</span></div>
+
+      <div class="form-group">
+        <label>Geo Region (preset)</label>
+        <select id="geo-preset">
+          <option value="">Select location…</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Server ID</label>
+        <input type="text" id="server-id" placeholder="e.g. MUM-02" />
+      </div>
+      <div class="form-group">
+        <label>Dataset (for replay simulation)</label>
+        <input type="text" id="data-path" placeholder="data/raw/filtered_nowebatt.csv" />
+      </div>
+      <div class="form-group">
+        <label>Flows / second (0 = burst)</label>
+        <input type="number" id="fps" value="50" min="0" max="10000" />
+      </div>
+      <button class="btn btn-primary" onclick="addServer()">
+        <span>➕</span> Register Server
+      </button>
+    </div>
+
+    <!-- Active Servers -->
+    <div class="card" style="flex:1">
+      <div class="card-title">📡 <span>Active Servers</span>
+        <span id="server-count" style="margin-left:auto;font-size:0.72rem;color:var(--text-dim)">0</span>
+      </div>
+      <div id="server-list">
+        <div style="color:var(--text-dim);font-size:0.78rem;text-align:center;padding:2rem 0">
+          No servers registered yet.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Right Content ── -->
+  <div class="content">
+
+    <!-- World Map -->
+    <div id="world-map-container">
+      <svg id="world-map" viewBox="0 0 800 280" xmlns="http://www.w3.org/2000/svg">
+        <!-- Simplified world outline paths -->
+        <rect width="800" height="280" fill="transparent"/>
+        <!-- Grid lines -->
+        <line x1="0" y1="140" x2="800" y2="140" stroke="rgba(99,179,237,0.06)" stroke-width="1"/>
+        <line x1="400" y1="0" x2="400" y2="280" stroke="rgba(99,179,237,0.06)" stroke-width="1"/>
+        <!-- Simplified continents as polygons -->
+        <!-- North America -->
+        <polygon points="60,60 200,60 200,180 140,200 60,150" fill="rgba(59,130,246,0.08)" stroke="rgba(59,130,246,0.2)" stroke-width="1"/>
+        <!-- South America -->
+        <polygon points="140,200 200,200 220,270 140,275 110,240" fill="rgba(59,130,246,0.08)" stroke="rgba(59,130,246,0.2)" stroke-width="1"/>
+        <!-- Europe -->
+        <polygon points="340,60 420,60 420,130 340,130" fill="rgba(59,130,246,0.08)" stroke="rgba(59,130,246,0.2)" stroke-width="1"/>
+        <!-- Africa -->
+        <polygon points="340,130 420,130 430,240 360,250 320,200" fill="rgba(59,130,246,0.08)" stroke="rgba(59,130,246,0.2)" stroke-width="1"/>
+        <!-- Asia -->
+        <polygon points="420,40 700,40 700,180 420,180" fill="rgba(59,130,246,0.08)" stroke="rgba(59,130,246,0.2)" stroke-width="1"/>
+        <!-- Australia -->
+        <polygon points="620,200 720,200 720,260 640,265 610,230" fill="rgba(59,130,246,0.08)" stroke="rgba(59,130,246,0.2)" stroke-width="1"/>
+        <!-- Equator label -->
+        <text x="10" y="143" class="map-grid-label">EQ</text>
+        <text x="10" y="58" class="map-grid-label">30°N</text>
+        <!-- Server dots layer -->
+        <g id="map-dots"></g>
+      </svg>
+    </div>
+
+    <!-- Stats Row -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Total Flows</div>
+        <div class="stat-value blue" id="stat-flows">0</div>
+        <div class="stat-sub">processed</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Threats</div>
+        <div class="stat-value red" id="stat-threats">0</div>
+        <div class="stat-sub">detected</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Mean Latency</div>
+        <div class="stat-value yellow" id="stat-mean">—</div>
+        <div class="stat-sub">ms end-to-end</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">P99 Latency</div>
+        <div class="stat-value" id="stat-p99">—</div>
+        <div class="stat-sub">ms</div>
+      </div>
+    </div>
+
+    <!-- Latency Breakdown + Log -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+
+      <div class="card">
+        <div class="card-title">⏱ <span>Latency Breakdown</span></div>
+        <div class="latency-bars" id="latency-bars">
+          <div class="lat-row">
+            <div class="lat-label">P50</div>
+            <div class="lat-bar-wrap"><div class="lat-bar" id="bar-p50" style="width:0%"></div></div>
+            <div class="lat-val" id="val-p50">—</div>
+          </div>
+          <div class="lat-row">
+            <div class="lat-label">P95</div>
+            <div class="lat-bar-wrap"><div class="lat-bar" id="bar-p95" style="width:0%;background:linear-gradient(90deg,#f59e0b,#ef4444)"></div></div>
+            <div class="lat-val" id="val-p95">—</div>
+          </div>
+          <div class="lat-row">
+            <div class="lat-label">P99</div>
+            <div class="lat-bar-wrap"><div class="lat-bar" id="bar-p99" style="width:0%;background:linear-gradient(90deg,#ef4444,#dc2626)"></div></div>
+            <div class="lat-val" id="val-p99-2">—</div>
+          </div>
+          <div class="lat-row">
+            <div class="lat-label">Max</div>
+            <div class="lat-bar-wrap"><div class="lat-bar" id="bar-max" style="width:0%;background:#64748b"></div></div>
+            <div class="lat-val" id="val-max">—</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">📋 <span>Live Event Log</span></div>
+        <div id="log-feed">
+          <div class="log-entry log-info">— System ready. Awaiting flows… —</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+// ── State ──────────────────────────────────────────────────
+
+let knownServers = {};
+let presets = [];
+let logLines = 0;
+const MAX_LOG = 80;
+
+// ── Boot ──────────────────────────────────────────────────
+
+async function boot() {
+  await loadPresets();
+  checkKafka();
+  startSSE();
+  setInterval(checkKafka, 10000);
+}
+
+// ── Presets ──────────────────────────────────────────────
+
+async function loadPresets() {
+  try {
+    const r = await fetch('/api/presets');
+    const d = await r.json();
+    presets = d.presets;
+    const sel = document.getElementById('geo-preset');
+    presets.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = JSON.stringify(p);
+      opt.textContent = `${p.label}  (${p.region})`;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener('change', onPresetChange);
+  } catch(e) { console.warn('Presets load failed', e); }
+}
+
+function onPresetChange() {
+  const sel = document.getElementById('geo-preset');
+  if (!sel.value) return;
+  const p = JSON.parse(sel.value);
+  const existing = Object.keys(knownServers).filter(id => id.startsWith(p.id));
+  document.getElementById('server-id').value = `${p.id}-${String(existing.length + 1).padStart(2,'0')}`;
+}
+
+// ── Add Server ────────────────────────────────────────────
+
+async function addServer() {
+  const preset = document.getElementById('geo-preset').value;
+  if (!preset) { toast('Select a geo region first', 'error'); return; }
+  const p = JSON.parse(preset);
+  const sid = document.getElementById('server-id').value.trim();
+  if (!sid) { toast('Enter a Server ID', 'error'); return; }
+
+  const payload = {
+    server_id: sid,
+    geo_region: p.region,
+    geo_label: p.label,
+    lat: p.lat,
+    lon: p.lon,
+    ip: 'simulator',
+    interface: 'simulated',
+    data_path: document.getElementById('data-path').value.trim() || null,
+    flows_per_second: parseFloat(document.getElementById('fps').value) || 50,
+    n_servers_total: Object.keys(knownServers).length + 1,
+  };
+
+  try {
+    const r = await fetch('/api/servers', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json();
+    toast(`✓ ${sid} registered → partition ${d.server.kafka_partition}`, 'success');
+    addLog(`info`, `Server ${sid} registered (${p.label}) → partition ${d.server.kafka_partition}`);
+    document.getElementById('server-id').value = '';
+    document.getElementById('geo-preset').value = '';
+  } catch(e) {
+    toast(`Failed: ${e.message}`, 'error');
+  }
+}
+
+async function removeServer(serverId) {
+  if (!confirm(`Deregister ${serverId}?`)) return;
+  await fetch(`/api/servers/${serverId}`, {method:'DELETE'});
+  toast(`${serverId} deregistered`, 'success');
+  addLog('info', `Server ${serverId} deregistered`);
+}
+
+// ── SSE Live Updates ──────────────────────────────────────
+
+function startSSE() {
+  const evtSrc = new EventSource('/api/stats/stream');
+  evtSrc.onmessage = e => {
+    try { updateUI(JSON.parse(e.data)); } catch(err) { console.warn(err); }
+  };
+  evtSrc.onerror = () => {
+    setTimeout(startSSE, 3000);
+  };
+}
+
+function updateUI(data) {
+  // Servers
+  const servers = data.servers || [];
+  updateServerList(servers);
+  updateMapDots(servers);
+  document.getElementById('server-count').textContent = servers.length;
+
+  // Pipeline stats
+  const p = (data.pipeline || {}).latency || {};
+  if (p.count) {
+    document.getElementById('stat-flows').textContent = p.count.toLocaleString();
+    document.getElementById('stat-threats').textContent = Math.round(p.count * 0.15).toLocaleString(); // approximation
+    document.getElementById('stat-mean').textContent = p.mean_ms ? p.mean_ms.toFixed(1) : '—';
+    document.getElementById('stat-p99').textContent = p.p99_ms ? p.p99_ms.toFixed(1) : '—';
+
+    // Latency bars (normalized to max)
+    const maxVal = p.max_ms || 1;
+    updateBar('p50', p.median_ms, maxVal);
+    updateBar('p95', p.p95_ms, maxVal);
+    updateBar('p99', p.p99_ms, maxVal);
+    updateBar('max', p.max_ms, maxVal);
+  }
+
+  // Kafka status
+  document.getElementById('kafka-dot').className = 'dot online';
+  document.getElementById('kafka-label').textContent = `Kafka: connected  ${data.active_servers || 0} active`;
+}
+
+function updateBar(key, val, max) {
+  const pct = max > 0 ? Math.min((val / max) * 100, 100) : 0;
+  const barEl = document.getElementById(`bar-${key}`);
+  const valEl = document.getElementById(`val-${key}`) || document.getElementById(`val-${key}-2`);
+  if (barEl) barEl.style.width = pct + '%';
+  if (valEl) valEl.textContent = val ? val.toFixed(0) + 'ms' : '—';
+}
+
+function updateServerList(servers) {
+  const list = document.getElementById('server-list');
+  if (servers.length === 0) {
+    list.innerHTML = '<div style="color:var(--text-dim);font-size:0.78rem;text-align:center;padding:2rem 0">No servers registered yet.</div>';
+    return;
+  }
+  const newIds = new Set(servers.map(s => s.server_id));
+  // Add new
+  servers.forEach(s => {
+    if (!knownServers[s.server_id]) {
+      addLog('info', `${s.server_id} online (${s.geo_label})`);
+    }
+    knownServers[s.server_id] = s;
+  });
+  // Re-render
+  list.innerHTML = servers.map(s => `
+    <div class="server-item" id="si-${s.server_id}">
+      <div class="server-left">
+        <div class="server-status ${s.alive ? 'alive' : 'dead'}"></div>
+        <div>
+          <div class="server-name">${s.server_id}</div>
+          <div class="server-geo">${s.geo_label}</div>
+        </div>
+      </div>
+      <div class="server-right">
+        <span class="partition-badge">P${s.kafka_partition}</span>
+        <button class="btn btn-danger" onclick="removeServer('${s.server_id}')">✕</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ── World Map Dots ────────────────────────────────────────
+
+function latLonToXY(lat, lon, w=800, h=280) {
+  // Simple equirectangular projection
+  const x = ((lon + 180) / 360) * w;
+  const y = ((90 - lat) / 180) * h;
+  return [x, y];
+}
+
+function updateMapDots(servers) {
+  const g = document.getElementById('map-dots');
+  g.innerHTML = '';
+
+  servers.forEach(s => {
+    const [x, y] = latLonToXY(s.lat, s.lon);
+    const color = s.alive ? '#10b981' : '#ef4444';
+
+    // Pulse ring
+    const ring = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    ring.setAttribute('cx', x); ring.setAttribute('cy', y); ring.setAttribute('r', 14);
+    ring.setAttribute('fill', 'none'); ring.setAttribute('stroke', color);
+    ring.setAttribute('stroke-width', '1'); ring.setAttribute('opacity', '0.3');
+    g.appendChild(ring);
+
+    // Core dot
+    const dot = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    dot.setAttribute('cx', x); dot.setAttribute('cy', y); dot.setAttribute('r', '6');
+    dot.setAttribute('fill', color); dot.setAttribute('class','map-server-dot');
+    dot.style.filter = `drop-shadow(0 0 6px ${color})`;
+
+    const title = document.createElementNS('http://www.w3.org/2000/svg','title');
+    title.textContent = `${s.server_id}  ${s.geo_label}  P${s.kafka_partition}`;
+    dot.appendChild(title);
+    g.appendChild(dot);
+
+    // Label
+    const text = document.createElementNS('http://www.w3.org/2000/svg','text');
+    text.setAttribute('x', x + 9); text.setAttribute('y', y + 4);
+    text.setAttribute('fill', '#e2e8f0'); text.setAttribute('font-size', '9');
+    text.setAttribute('font-family', 'JetBrains Mono, monospace');
+    text.textContent = s.server_id;
+    g.appendChild(text);
+  });
+}
+
+// ── Log Feed ──────────────────────────────────────────────
+
+function addLog(type, msg) {
+  const feed = document.getElementById('log-feed');
+  const ts = new Date().toLocaleTimeString('en-US', {hour12:false});
+  const div = document.createElement('div');
+  div.className = `log-entry log-${type}`;
+  div.textContent = `[${ts}] ${msg}`;
+  feed.appendChild(div);
+  logLines++;
+  if (logLines > MAX_LOG) feed.removeChild(feed.firstChild);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+// ── Kafka status ──────────────────────────────────────────
+
+async function checkKafka() {
+  try {
+    const r = await fetch('/api/stats', { signal: AbortSignal.timeout(3000) });
+    const ok = r.ok;
+    document.getElementById('kafka-dot').className = `dot ${ok ? 'online' : ''}`;
+    document.getElementById('kafka-label').textContent = ok ? 'Kafka: connected' : 'Kafka: unreachable';
+  } catch {
+    document.getElementById('kafka-dot').className = 'dot';
+    document.getElementById('kafka-label').textContent = 'Kafka: unreachable';
+  }
+}
+
+// ── Toast ────────────────────────────────────────────────
+
+function toast(msg, type='success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `show ${type}`;
+  setTimeout(() => { t.className = ''; }, 3200);
+}
+
+// ── Init ─────────────────────────────────────────────────
+
+boot();
+</script>
+</body>
+</html>

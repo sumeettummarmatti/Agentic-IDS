@@ -48,3 +48,8 @@ htmlcov/
 # LLM outputs (can be large)
 *.txt.bak
 outputs/
+backend/data/raw/
+*.csv
+*.xlsx
+*.pkl
+backend/models/trained/

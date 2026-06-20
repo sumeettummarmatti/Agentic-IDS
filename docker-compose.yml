@@ -1,0 +1,277 @@
+version: "3.9"
+
+# ═══════════════════════════════════════════════════════════════
+#  Agentic-IDS  —  Full Docker Compose Stack
+#
+#  Services:
+#    kafka          KRaft broker (no Zookeeper)
+#    kafka-init     One-shot topic creator
+#    kafka-ui       Web UI at http://localhost:8080
+#    server-mum     Mumbai capture server  (slice 0/3)
+#    server-use     US-East capture server (slice 1/3)
+#    server-lon     London capture server  (slice 2/3)
+#    ids-consumer   Full IDS pipeline + dashboard :5001
+#
+#  Ports exposed to host:
+#    9092  Kafka external (local Python)
+#    8080  Kafka UI
+#    5001  Server Manager dashboard
+#
+#  Usage:
+#    docker-compose up                    # all services
+#    docker-compose up kafka kafka-ui     # infra only
+#    docker-compose up --scale server-mum=2  # scale one server
+#    docker-compose down -v               # teardown + wipe volumes
+# ═══════════════════════════════════════════════════════════════
+
+services:
+
+  # ─────────────────────────────────────────────────────────────
+  #  Kafka  (KRaft mode — no Zookeeper)
+  #
+  #  Two listener addresses:
+  #    PLAINTEXT://localhost:9092   ← for local Python (your terminal)
+  #    INTERNAL://kafka:29092       ← for containers talking to each other
+  # ─────────────────────────────────────────────────────────────
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: agentic-ids-kafka
+    ports:
+      - "9092:9092"      # external: local Python → Kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+
+      # Two listener groups: external (PLAINTEXT) + internal (INTERNAL)
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: agentic-ids-cluster-v1
+
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 6
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+
+      # Flow data is time-sensitive — keep for 1h only
+      KAFKA_LOG_RETENTION_MS: 3600000
+      KAFKA_LOG_RETENTION_BYTES: 1073741824
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    networks:
+      - ids-net
+
+  # ─────────────────────────────────────────────────────────────
+  #  Topic Initializer — creates all topics once on startup
+  # ─────────────────────────────────────────────────────────────
+  kafka-init:
+    image: apache/kafka:3.7.0
+    container_name: agentic-ids-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "
+      echo '=== Creating Kafka topics ==='
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
+        --create --if-not-exists \
+        --topic raw-flows --partitions 6 --replication-factor 1 \
+        --config retention.ms=3600000
+
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
+        --create --if-not-exists \
+        --topic threats --partitions 6 --replication-factor 1 \
+        --config retention.ms=86400000
+
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
+        --create --if-not-exists \
+        --topic decisions --partitions 6 --replication-factor 1 \
+        --config retention.ms=86400000
+
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
+        --create --if-not-exists \
+        --topic server-registry --partitions 1 --replication-factor 1 \
+        --config retention.ms=604800000 --config cleanup.policy=compact
+
+      echo '=== Topics ready ==='
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list
+      "
+    restart: "no"
+    networks:
+      - ids-net
+
+  # ─────────────────────────────────────────────────────────────
+  #  Kafka UI  →  http://localhost:8080
+  # ─────────────────────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: agentic-ids-kafka-ui
+    ports:
+      - "8080:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: agentic-ids-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092   # internal listener
+      DYNAMIC_CONFIG_ENABLED: "true"
+    restart: unless-stopped
+    networks:
+      - ids-net
+
+  # ═══════════════════════════════════════════════════════════════
+  #  SIMULATED GEO-CAPTURE SERVERS
+  #
+  #  Each container = one capture agent from a different city.
+  #  They all share the same dataset (read-only volume mount) but
+  #  each gets a different SLICE_INDEX so they see different rows.
+  #  TOTAL_SLICES must equal the number of server-* services.
+  #
+  #  Kafka routing:
+  #    server_id key → hash-partitioned by librdkafka
+  #    MUM-01 always lands on partition N, USE-01 on partition M, etc.
+  #    The IDS consumer reads all partitions in parallel.
+  # ═══════════════════════════════════════════════════════════════
+
+  # ─── Mumbai, India ────────────────────────────────────────────
+  server-mum:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: agentic-ids-server-mum
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      SERVER_ID: MUM-01
+      GEO_REGION: asia-south1
+      GEO_LABEL: "Mumbai, India"
+      SLICE_INDEX: "0"
+      TOTAL_SLICES: "3"
+      FLOWS_PER_SECOND: "100"      # 100 flows/s — adjust for load test
+      LOOP: "true"                  # keep replaying until container stops
+      DATA_PATH: /app/data/raw/filtered_nowebatt.csv
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_RAW_FLOWS_TOPIC: raw-flows
+    volumes:
+      - ./backend/data:/app/data:ro   # read-only dataset mount
+    restart: on-failure
+    networks:
+      - ids-net
+
+  # ─── US East, Virginia ────────────────────────────────────────
+  server-use:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: agentic-ids-server-use
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      SERVER_ID: USE-01
+      GEO_REGION: us-east1
+      GEO_LABEL: "Virginia, USA"
+      SLICE_INDEX: "1"
+      TOTAL_SLICES: "3"
+      FLOWS_PER_SECOND: "150"
+      LOOP: "true"
+      DATA_PATH: /app/data/raw/filtered_nowebatt.csv
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_RAW_FLOWS_TOPIC: raw-flows
+    volumes:
+      - ./backend/data:/app/data:ro
+    restart: on-failure
+    networks:
+      - ids-net
+
+  # ─── London, UK ───────────────────────────────────────────────
+  server-lon:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: agentic-ids-server-lon
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      SERVER_ID: LON-01
+      GEO_REGION: europe-west2
+      GEO_LABEL: "London, UK"
+      SLICE_INDEX: "2"
+      TOTAL_SLICES: "3"
+      FLOWS_PER_SECOND: "80"
+      LOOP: "true"
+      DATA_PATH: /app/data/raw/filtered_nowebatt.csv
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_RAW_FLOWS_TOPIC: raw-flows
+    volumes:
+      - ./backend/data:/app/data:ro
+    restart: on-failure
+    networks:
+      - ids-net
+
+  # ═══════════════════════════════════════════════════════════════
+  #  IDS CONSUMER — full ML pipeline
+  #
+  #  Reads raw-flows, runs XGBoost+LSTM ensemble → LLM council →
+  #  RL defender, publishes results to threats + decisions topics.
+  #  Server Manager dashboard at http://localhost:5001
+  # ═══════════════════════════════════════════════════════════════
+  ids-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile.ids
+    container_name: agentic-ids-consumer
+    ports:
+      - "5001:5001"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      # Kafka — internal listener
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_RAW_FLOWS_TOPIC: raw-flows
+      KAFKA_THREATS_TOPIC: threats
+      KAFKA_DECISIONS_TOPIC: decisions
+      KAFKA_SERVER_REGISTRY_TOPIC: server-registry
+      KAFKA_CONSUMER_GROUP: agentic-ids-group
+      # LLM
+      PRIMARY_LLM_PROVIDER: groq
+      LLM_PROVIDER: groq
+      GROQ_API_KEY: ${GROQ_API_KEY}        # injected from host .env
+      # Paths (volume-mounted)
+      DATA_PATH: /app/data/raw/filtered_nowebatt.csv
+    volumes:
+      - ./backend/data:/app/data:ro
+      - ./backend/models:/app/models       # persist trained models
+      - ./backend/config:/app/config:ro    # .env, config files
+    restart: unless-stopped
+    networks:
+      - ids-net
+
+# ─────────────────────────────────────────────────────────────
+#  Shared network — all containers communicate here
+# ─────────────────────────────────────────────────────────────
+networks:
+  ids-net:
+    driver: bridge
+
+volumes:
+  kafka-data:
+    driver: local

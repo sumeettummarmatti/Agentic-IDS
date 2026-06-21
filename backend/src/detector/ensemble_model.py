@@ -61,24 +61,60 @@ class EnsembleDetector:
     
     def _load_models(self):
         """Load pre-trained models"""
-        xgb_path = self.model_path / 'xgboost_multiclass.pkl'
-        scaler_path = self.model_path / 'scaler.pkl'
-        
+        xgb_path          = self.model_path / 'xgboost_multiclass.pkl'
+        scaler_path        = self.model_path / 'scaler.pkl'
+        class_mapping_path = self.model_path / 'class_mapping.pkl'
+        lstm_path          = self.model_path / 'lstm_detector.pt'
+
         try:
             if xgb_path.exists():
                 self.xgb_model = joblib.load(xgb_path)
                 logger.info("✓ Loaded XGBoost model")
-            
+
             if scaler_path.exists():
                 self.scaler = joblib.load(scaler_path)
                 logger.info("✓ Loaded scaler")
-                
-            # Initialize LSTM (dummy weights if no path, normally would load)
+
+            # Load class mapping so training_classes_ is set at inference time.
+            # stages.py checks hasattr(detector, 'training_classes_') to decide
+            # how to map raw prediction indices to class names.
+            if class_mapping_path.exists():
+                self.training_classes_ = joblib.load(class_mapping_path)
+                logger.info(f"✓ Loaded class mapping: {self.training_classes_}")
+            else:
+                logger.warning("class_mapping.pkl not found — training_classes_ will be unset")
+
             if self.use_lstm:
-                self.lstm_model = LSTMDetector(input_size=self.input_size, num_classes=len(self.class_names))
-                self.lstm_model.eval() # Set to eval mode
-                logger.info("✓ Initialized LSTM model")
-                
+                n_classes = len(self.training_classes_) if hasattr(self, 'training_classes_') else 3
+
+                if lstm_path.exists():
+                    # Load the saved checkpoint — architecture + trained weights.
+                    # The checkpoint stores input_size so we reconstruct the exact
+                    # same architecture that was used during training.
+                    ckpt = torch.load(lstm_path, map_location='cpu', weights_only=False)
+                    saved_input  = ckpt.get('input_size', self.input_size)
+                    saved_n_cls  = ckpt.get('num_classes', n_classes)
+                    self.input_size = saved_input
+                    self.lstm_model = LSTMDetector(
+                        input_size=saved_input, num_classes=saved_n_cls
+                    )
+                    self.lstm_model.load_state_dict(ckpt['state_dict'])
+                    self.lstm_model.eval()
+                    logger.info(
+                        f"✓ Loaded LSTM checkpoint "
+                        f"(input={saved_input}, classes={saved_n_cls})"
+                    )
+                else:
+                    # First run — random init; will be replaced when train() runs.
+                    self.lstm_model = LSTMDetector(
+                        input_size=self.input_size, num_classes=n_classes
+                    )
+                    self.lstm_model.eval()
+                    logger.info(
+                        f"✓ Initialized LSTM model "
+                        f"({n_classes} output classes, random weights until train())"
+                    )
+
         except Exception as e:
             logger.error(f"Error loading models: {e}")
     
@@ -265,20 +301,39 @@ class EnsembleDetector:
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(self.lstm_model.parameters(), lr=0.01)
         
-        # Simple training loop
+        # Training loop — 10 epochs for better convergence
         self.lstm_model.train()
-        for epoch in range(5):
+        for epoch in range(10):
             optimizer.zero_grad()
             outputs = self.lstm_model(X_train_t)
             loss = criterion(outputs, y_train_t)
             loss.backward()
             optimizer.step()
-            logger.info(f"LSTM Epoch {epoch+1}, Loss: {loss.item():.4f}")
-            
-        # Save
+            logger.info(f"LSTM Epoch {epoch+1}/10, Loss: {loss.item():.4f}")
+
+        self.lstm_model.eval()
+
+        # ── Persist all model artefacts ───────────────────────────────────
         self.model_path.mkdir(parents=True, exist_ok=True)
+
+        # XGBoost
         joblib.dump(self.xgb_model, self.model_path / 'xgboost_multiclass.pkl')
-        # Also need to save the mapping if we want to load it later!
+
+        # Class mapping (needed by _load_models + stages.py at inference time)
         joblib.dump(self.training_classes_, self.model_path / 'class_mapping.pkl')
-        
-        logger.info("✓ Models trained and saved")
+
+        # LSTM checkpoint — state_dict + architecture metadata so _load_models()
+        # can reconstruct the exact same model without needing the training data.
+        torch.save(
+            {
+                'state_dict': self.lstm_model.state_dict(),
+                'input_size': X_train.shape[1],
+                'num_classes': num_classes_in_batch,
+            },
+            self.model_path / 'lstm_detector.pt',
+        )
+
+        logger.info(
+            f"✓ Models trained and saved → "
+            f"xgboost_multiclass.pkl, class_mapping.pkl, lstm_detector.pt"
+        )

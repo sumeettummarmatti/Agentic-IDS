@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>Agentic-IDS · Cyber Monitoring</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
   <script>
     tailwind.config = {
@@ -77,6 +78,36 @@
       background: linear-gradient(transparent, rgba(226,0,26,0.04), transparent);
       animation: scanline 8s linear infinite; pointer-events:none; z-index:0;
     }
+    /* ── Markdown prose rendering ─────────── */
+    .md-prose h1,.md-prose h2,.md-prose h3 { color:#f1f5f9; font-weight:700; margin:0.75em 0 0.4em; border-bottom:1px solid #1e2530; padding-bottom:0.25em; }
+    .md-prose h1 { font-size:1em; }
+    .md-prose h2 { font-size:0.9em; color:#cbd5e1; }
+    .md-prose h3 { font-size:0.8em; color:#94a3b8; border:none; }
+    .md-prose p  { margin:0.5em 0; color:#cbd5e1; font-size:0.75em; line-height:1.7; }
+    .md-prose ul,.md-prose ol { margin:0.4em 0 0.4em 1.2em; }
+    .md-prose li { color:#94a3b8; font-size:0.72em; line-height:1.7; margin-bottom:0.15em; }
+    .md-prose strong { color:#f1f5f9; font-weight:600; }
+    .md-prose code { background:#0a0c0f; border:1px solid #1e2530; border-radius:3px; padding:0.1em 0.35em; font-family:'JetBrains Mono',monospace; font-size:0.7em; color:#34d399; }
+    .md-prose pre  { background:#0a0c0f; border:1px solid #1e2530; border-radius:6px; padding:0.75em; overflow-x:auto; margin:0.5em 0; }
+    .md-prose pre code { border:none; padding:0; color:#34d399; }
+    .md-prose blockquote { border-left:3px solid #e2001a; margin:0.5em 0; padding:0.3em 0.75em; color:#94a3b8; background:#1a0000; border-radius:0 4px 4px 0; }
+    .md-prose hr { border-color:#1e2530; margin:0.75em 0; }
+    .md-prose table { width:100%; border-collapse:collapse; font-size:0.7em; margin:0.5em 0; }
+    .md-prose th { background:#1e2530; color:#94a3b8; padding:0.3em 0.6em; text-align:left; font-weight:600; }
+    .md-prose td { border-top:1px solid #1e2530; padding:0.25em 0.6em; color:#cbd5e1; }
+    /* ── Attack Graph ─────────────────────── */
+    #attack-graph-svg { width:100%; height:180px; }
+    .graph-node { cursor:pointer; transition:filter 0.2s; }
+    .graph-node:hover circle,.graph-node:hover polygon { filter:brightness(1.3); }
+    .graph-node.selected circle,.graph-node.selected polygon { stroke-width:2.5px !important; }
+    @keyframes dashFlow { to { stroke-dashoffset: -20; } }
+    .flow-edge { animation: dashFlow 1.2s linear infinite; }
+    /* Node popup */
+    #graph-node-popup { pointer-events:none; transition:opacity 0.15s; }
+    /* Fullscreen graph overlay */
+    #graph-fullscreen { display:none; position:fixed; inset:0; z-index:9999; background:rgba(10,12,15,0.97); backdrop-filter:blur(12px); align-items:center; justify-content:center; flex-direction:column; }
+    #graph-fullscreen.active { display:flex; }
+    #graph-fullscreen svg { width:min(90vw,900px); height:320px; }
   </style>
 </head>
 <body class="h-full font-sans scanline">
@@ -107,15 +138,67 @@
     </button>
   </nav>
 
-  <div class="flex items-center gap-4 text-xs text-slate-500 font-mono">
+  <div class="flex items-center gap-3 text-xs text-slate-500 font-mono">
     <div id="kafka-status" class="flex items-center gap-2">
       <span id="kafka-dot" class="w-2 h-2 rounded-full bg-slate-600"></span>
       <span id="kafka-label">Connecting…</span>
     </div>
     <div class="text-cyber-border">|</div>
     <span id="clock" class="text-slate-400"></span>
+    <div class="text-cyber-border">|</div>
+    <!-- Session mode button -->
+    <div class="relative" id="session-btn-wrap">
+      <button id="session-btn" onclick="toggleSessionMenu()"
+        class="flex items-center gap-1.5 px-2.5 py-1 rounded border border-cyber-border hover:border-blue-400/50 hover:text-blue-400 transition-all text-[10px]" title="Session options">
+        <span id="session-mode-dot" class="w-1.5 h-1.5 rounded-full bg-green-400"></span>
+        <span id="session-mode-label">Session</span>
+        <span class="text-[9px] opacity-50">▾</span>
+      </button>
+      <div id="session-menu" class="hidden absolute right-0 top-full mt-1 bg-cyber-card border border-cyber-border rounded-lg shadow-xl overflow-hidden z-50" style="min-width:190px">
+        <div class="px-3 py-2 border-b border-cyber-border">
+          <div class="text-[9px] text-slate-500 uppercase tracking-widest">Session Mode</div>
+        </div>
+        <button onclick="continueFromCache()" class="w-full text-left px-3 py-2.5 text-[11px] hover:bg-blue-500/10 hover:text-blue-300 flex items-center gap-2 transition-all">
+          <span>💾</span><div><div class="font-semibold">Continue from cache</div><div class="text-[9px] text-slate-500">Load previous session data</div></div>
+        </button>
+        <button onclick="startFresh()" class="w-full text-left px-3 py-2.5 text-[11px] hover:bg-red-500/10 hover:text-red-300 flex items-center gap-2 transition-all border-t border-cyber-border">
+          <span>🗑</span><div><div class="font-semibold">Start fresh</div><div class="text-[9px] text-slate-500">Clear all cached reports</div></div>
+        </button>
+      </div>
+    </div>
   </div>
 </header>
+
+<!-- ═══════════════════ SESSION MODAL ═══════════════════ -->
+<div id="session-modal" class="hidden fixed inset-0 z-[9998] flex items-center justify-center" style="background:rgba(10,12,15,0.85);backdrop-filter:blur(10px)">
+  <div class="bg-cyber-card border border-cyber-border rounded-2xl shadow-2xl overflow-hidden" style="width:420px">
+    <!-- Header -->
+    <div class="px-6 pt-6 pb-4 border-b border-cyber-border">
+      <div class="flex items-center gap-3 mb-1">
+        <div class="w-8 h-8 sg-gradient rounded flex items-center justify-center glow-red flex-shrink-0">
+          <span class="text-white font-bold text-xs font-mono">IDS</span>
+        </div>
+        <div>
+          <div class="font-bold text-white text-sm">Session Detected</div>
+          <div class="text-[10px] text-slate-500">Previous analysis data found in cache</div>
+        </div>
+      </div>
+    </div>
+    <!-- Body -->
+    <div class="px-6 py-5 space-y-3">
+      <div id="session-cache-info" class="bg-cyber-muted border border-cyber-border rounded-lg px-4 py-3 text-[11px] text-slate-300 font-mono"></div>
+      <button onclick="continueFromCache()" id="continue-btn"
+        class="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm rounded-xl transition-all flex items-center justify-center gap-2">
+        💾 Continue from cache
+      </button>
+      <button onclick="startFresh()"
+        class="w-full py-2.5 border border-red-500/30 text-red-400 hover:bg-red-500/10 font-semibold text-xs rounded-xl transition-all">
+        🗑 Start fresh — clear all reports
+      </button>
+      <div class="text-center text-[9px] text-slate-600">Auto-continuing in <span id="session-countdown">5</span>s…</div>
+    </div>
+  </div>
+</div>
 
 <!-- ═══════════════════ MAIN CONTENT ═══════════════════ -->
 
@@ -347,12 +430,75 @@
     </div>
 
     <!-- Detail panel -->
-    <div id="detail-panel" class="hidden w-96 border-l border-cyber-border overflow-y-auto bg-cyber-panel flex-shrink-0 p-4">
-      <div class="flex items-center justify-between mb-4">
-        <span class="text-[9px] text-slate-500 uppercase tracking-widest">Report Detail</span>
+    <div id="detail-panel" class="hidden w-[600px] border-l border-cyber-border overflow-y-auto bg-cyber-panel flex-shrink-0 p-4">
+      <div class="flex items-center justify-between mb-4 border-b border-cyber-border pb-2">
+        <span class="text-[9px] text-slate-500 uppercase tracking-widest">Report Detail & Knowledge Graph</span>
         <button onclick="closeDetail()" class="text-slate-600 hover:text-white text-lg leading-none">×</button>
       </div>
-      <div id="detail-content" class="space-y-4 text-xs"></div>
+
+      <!-- Action & Inference Header -->
+      <div class="flex items-center justify-between mb-4">
+        <button onclick="generateInference()" class="px-4 py-2 bg-sg-red hover:bg-sg-light text-white text-xs font-bold rounded shadow-lg glow-red transition-all">
+          Generate Incident Response Plan
+        </button>
+        <div id="inference-loading" class="hidden text-xs text-sg-red animate-pulse">Generating via Groq...</div>
+      </div>
+
+      <!-- Detail Content -->
+      <div id="detail-content" class="space-y-4 text-xs mb-4"></div>
+
+      <!-- Knowledge Graph -->
+      <div class="bg-cyber-card rounded-xl border border-cyber-border p-4 mb-4">
+        <div class="flex items-center justify-between mb-3">
+          <div class="text-[9px] text-slate-500 uppercase tracking-widest flex items-center gap-2">
+            <span class="w-1 h-3 bg-blue-500 rounded-full"></span>Attack Path Graph
+          </div>
+          <button onclick="expandGraph()" class="text-[9px] text-slate-500 hover:text-blue-400 border border-cyber-border hover:border-blue-400/40 px-2 py-0.5 rounded font-mono transition-all">⤢ Expand</button>
+        </div>
+        <div class="relative bg-[#080a0d] rounded-lg overflow-hidden">
+          <svg id="attack-graph-svg"></svg>
+          <!-- Node popup -->
+          <div id="graph-node-popup" class="absolute opacity-0 pointer-events-none bg-cyber-card border border-cyber-border rounded-lg p-3 text-[10px] shadow-xl" style="min-width:160px;max-width:220px;"></div>
+        </div>
+      </div>
+
+      <!-- Inference Result -->
+      <div id="inference-result-container" class="hidden bg-cyber-card rounded-xl border border-sg-red/30 p-4 mb-4 glow-red">
+        <div class="text-[9px] text-sg-red uppercase tracking-widest mb-3 flex items-center gap-2">
+          <span class="w-1 h-3 bg-sg-red rounded-full"></span>Incident Response Plan
+        </div>
+        <div id="inference-result" class="md-prose"></div>
+      </div>
+
+      <!-- Raw LLM Responses -->
+      <div class="bg-cyber-card rounded-xl border border-cyber-border p-4">
+        <div class="text-[9px] text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+          <span class="w-1 h-3 bg-purple-500 rounded-full"></span>AI Council Transcripts
+        </div>
+        <div class="space-y-5 mt-2">
+          <div class="border border-red-500/20 rounded-lg overflow-hidden">
+            <div class="flex items-center gap-2 px-3 py-2 bg-red-500/5 border-b border-red-500/20">
+              <span class="w-1.5 h-1.5 bg-red-400 rounded-full animate-pulse"></span>
+              <span class="text-[10px] font-bold text-red-400 uppercase tracking-widest">Security Analyst</span>
+            </div>
+            <div id="raw-analyst" class="md-prose p-3 bg-[#080a0d]">N/A</div>
+          </div>
+          <div class="border border-blue-500/20 rounded-lg overflow-hidden">
+            <div class="flex items-center gap-2 px-3 py-2 bg-blue-500/5 border-b border-blue-500/20">
+              <span class="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse"></span>
+              <span class="text-[10px] font-bold text-blue-400 uppercase tracking-widest">ML Engineer</span>
+            </div>
+            <div id="raw-engineer" class="md-prose p-3 bg-[#080a0d]">N/A</div>
+          </div>
+          <div class="border border-green-500/20 rounded-lg overflow-hidden">
+            <div class="flex items-center gap-2 px-3 py-2 bg-green-500/5 border-b border-green-500/20">
+              <span class="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse"></span>
+              <span class="text-[10px] font-bold text-green-400 uppercase tracking-widest">Threat Intel</span>
+            </div>
+            <div id="raw-intel" class="md-prose p-3 bg-[#080a0d]">N/A</div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -614,9 +760,98 @@ async function boot() {
   await loadPresets();
   startSSE();
   syncMonitored();
-  loadReportTotals();
   setInterval(syncMonitored, 5000);
   setInterval(loadReportTotals, 15000);
+
+  // Check if cached data exists — show session chooser if it does
+  try {
+    const r = await fetch('/api/reports?limit=1');
+    const d = await r.json();
+    const totalFiles = Object.values(d.total_in_files || {});
+    const totalLines = totalFiles.reduce((a, b) => a + b, 0);
+    if (totalLines > 0) {
+      showSessionModal(d);
+    } else {
+      loadReportTotals();
+    }
+  } catch(e) {
+    loadReportTotals();
+  }
+}
+
+function showSessionModal(data) {
+  const modal = document.getElementById('session-modal');
+  const info  = document.getElementById('session-cache-info');
+  const files = data.total_in_files || {};
+  const lines = Object.values(files).reduce((a,b)=>a+b,0);
+  const serverList = Object.keys(files).join(', ');
+  info.innerHTML = [
+    `<span class="text-blue-400">${lines}</span> cached records`,
+    `<span class="text-slate-500"> · Servers: </span><span class="text-white">${serverList || 'N/A'}</span>`,
+    `<span class="text-slate-500"> · Threats: </span><span class="text-sg-red">${data.records ? data.records.length : 0}</span>`,
+  ].join(' ');
+  modal.classList.remove('hidden');
+
+  // Auto-continue countdown
+  let secs = 5;
+  const cd = document.getElementById('session-countdown');
+  const timer = setInterval(() => {
+    secs--;
+    if (cd) cd.textContent = secs;
+    if (secs <= 0) { clearInterval(timer); continueFromCache(); }
+  }, 1000);
+  modal._timer = timer;
+}
+
+async function continueFromCache() {
+  const modal = document.getElementById('session-modal');
+  clearInterval(modal._timer);
+  modal.classList.add('hidden');
+  try {
+    const r = await fetch('/api/restore-session', {method:'POST'});
+    const d = await r.json();
+    if (d.servers_restored && d.servers_restored.length > 0) {
+      showToast(`💾 Session restored (${d.servers_restored.join(', ')})`, 'success');
+    } else {
+      showToast('💾 Session restored (No servers to restore)', 'info');
+    }
+  } catch(e) {
+    showToast('Failed to restore session servers: ' + e.message, 'error');
+  }
+  document.getElementById('session-mode-dot').className = 'w-1.5 h-1.5 rounded-full bg-blue-400';
+  document.getElementById('session-mode-label').textContent = 'Cached';
+  loadReportTotals();
+  // If already on reports tab, load immediately
+  if (currentTab === 'reports') loadReports();
+}
+
+async function startFresh() {
+  const modal = document.getElementById('session-modal');
+  clearInterval(modal._timer);
+  modal.classList.add('hidden');
+  try {
+    const r = await fetch('/api/cache', {method:'DELETE'});
+    const d = await r.json();
+    allReports = []; filteredReports = [];
+    document.getElementById('session-mode-dot').className = 'w-1.5 h-1.5 rounded-full bg-green-400';
+    document.getElementById('session-mode-label').textContent = 'Fresh';
+    loadReportTotals();
+    if (currentTab === 'reports') loadReports();
+    showToast(`✓ Started fresh — cleared ${d.files_removed} file(s)`, 'success');
+  } catch(e) { showToast('Clear failed: ' + e.message, 'error'); }
+}
+
+function toggleSessionMenu() {
+  const m = document.getElementById('session-menu');
+  m.classList.toggle('hidden');
+  // Close on outside click
+  const close = (e) => {
+    if (!document.getElementById('session-btn-wrap').contains(e.target)) {
+      m.classList.add('hidden');
+      document.removeEventListener('click', close);
+    }
+  };
+  if (!m.classList.contains('hidden')) setTimeout(() => document.addEventListener('click', close), 0);
 }
 
 async function clearCache() {
@@ -957,12 +1192,22 @@ function renderReportTable(records) {
   }).join('');
 }
 
+let currentReportForInference = null;
+
 // ═══════════════════ DETAIL PANEL ═══════════════════
 function showDetail(idx) {
   const r = filteredReports[idx];
   if (!r) return;
+  currentReportForInference = r;
+  
   const panel = document.getElementById('detail-panel');
   const content = document.getElementById('detail-content');
+  
+  // Hide inference result
+  document.getElementById('inference-result-container').classList.add('hidden');
+  document.getElementById('inference-result').textContent = '';
+  document.getElementById('inference-loading').classList.add('hidden');
+
   panel.classList.remove('hidden');
 
   const votePill = (agent, action) => {
@@ -974,11 +1219,22 @@ function showDetail(idx) {
   const votes = r.agent_votes || {};
   const cmds = (r.command_comments||[]).join('\n') || '(no commands — MONITOR or BENIGN)';
   const indicators = (r.all_indicators||[]);
+  
+  const initialAction = r.rl_action || '—';
+  const finalAction = r.final_rl_action || r.rl_action || '—';
+  
+  const isChanged = r.final_rl_action && r.final_rl_action !== r.rl_action;
+  let actionHeader = '';
+  if (isChanged) {
+      actionHeader = `<div class="text-sm font-bold text-white mb-0.5"><span class="line-through text-slate-500 mr-2">${initialAction}</span> <span class="text-yellow-400">→</span> ${finalAction}</div>`;
+  } else {
+      actionHeader = `<div class="text-sm font-bold text-white mb-0.5">${finalAction}</div>`;
+  }
 
   content.innerHTML = `
     <div class="border border-sg-red/20 rounded-lg p-3 bg-sg-red/5">
-      <div class="text-[9px] text-sg-red uppercase tracking-widest mb-2">Verdict</div>
-      <div class="text-sm font-bold text-white mb-0.5">${r.rl_action||'—'}</div>
+      <div class="text-[9px] text-sg-red uppercase tracking-widest mb-2">Verdict (Initial → Final)</div>
+      ${actionHeader}
       <div class="text-[10px] text-slate-400">${r.attack_type||'Unknown'} · ${r.server_id} · ${r.geo_label||''}</div>
     </div>
 
@@ -1050,10 +1306,183 @@ function showDetail(idx) {
       <div class="font-mono text-[9px] text-slate-500 break-all">${r.flow_id||'—'}</div>
     </div>
   `;
+
+  // ── Render raw LLM responses with markdown ──────────────────────
+  const raws = r.raw_responses || {};
+  const renderMd = (text) => {
+    if (!text || text.startsWith('Pending') || text === 'N/A') {
+      return `<p style="color:#475569;font-size:0.72em;font-style:italic">Pending LLM enrichment — run the pipeline with active threat detection to see transcripts.</p>`;
+    }
+    try { return marked.parse(text, { breaks: true }); }
+    catch(e) { return `<pre style="font-size:0.72em;color:#94a3b8;white-space:pre-wrap">${text}</pre>`; }
+  };
+  document.getElementById('raw-analyst').innerHTML  = renderMd(raws.analyst);
+  document.getElementById('raw-engineer').innerHTML = renderMd(raws.engineer);
+  document.getElementById('raw-intel').innerHTML    = renderMd(raws.intel);
+
+  // ── Build interactive SVG knowledge graph ────────────────────────
+  graphDataForExpand = r;  // cache for expand button
+  // Small delay so the panel is fully visible before measuring SVG width
+  setTimeout(() => buildAttackGraph(r, 'attack-graph-svg', 'graph-node-popup'), 80);
+}
+
+async function generateInference() {
+  if (!currentReportForInference) return;
+  const btn = document.querySelector('button[onclick="generateInference()"]');
+  const loading = document.getElementById('inference-loading');
+  const resultContainer = document.getElementById('inference-result-container');
+  const resultDiv = document.getElementById('inference-result');
+
+  btn.disabled = true;
+  btn.textContent = 'Analyzing…';
+  loading.classList.remove('hidden');
+  resultContainer.classList.add('hidden');
+
+  try {
+    const res = await fetch('/api/summarize-threat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(currentReportForInference)
+    });
+    const data = await res.json();
+    const text = data.status === 'success' ? data.summary : `**Error:** ${data.message}`;
+    try { resultDiv.innerHTML = marked.parse(text, { breaks: true }); }
+    catch(e) { resultDiv.textContent = text; }
+    resultContainer.classList.remove('hidden');
+    resultContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (err) {
+    resultDiv.innerHTML = `<p style="color:#f87171"><strong>Request failed:</strong> ${err.message}</p>`;
+    resultContainer.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate Incident Response Plan';
+    loading.classList.add('hidden');
+  }
 }
 
 function closeDetail() {
   document.getElementById('detail-panel').classList.add('hidden');
+  hideNodePopup('graph-node-popup');
+}
+
+// ═══════════════════ INTERACTIVE ATTACK GRAPH ═══════════════════
+let graphDataForExpand = null;
+
+function buildAttackGraph(r, svgId, popupId) {
+  const svgEl = document.getElementById(svgId);
+  if (!svgEl) return;
+  const W = svgEl.clientWidth || svgEl.parentElement.clientWidth || 520;
+  const H = 180;
+  svgEl.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svgEl.innerHTML = '';
+
+  const finalAction = r.final_rl_action || r.rl_action || 'MONITOR';
+  const attackType  = r.attack_type || 'Unknown';
+  let srcIp = 'Attacker', dstIp = 'Target', dstPort = '?';
+  if (r.flow_id && r.flow_id.includes('-')) {
+    const p = r.flow_id.split('-');
+    if (p.length >= 2) { srcIp = p[0]; dstIp = p[1]; }
+    if (p.length >= 4) { dstPort = p[3]; }
+  }
+  const clamp = (s, n) => s && s.length > n ? s.slice(0, n) + '…' : (s || '?');
+
+  const nodes = [
+    { id:'attacker', x:W*0.08, y:H/2, r:22, color:'#e2001a',
+      label:'Attacker', sub:clamp(srcIp,14),
+      details:{'Source IP':srcIp,'Attack':attackType,'Confidence':((r.confidence||0)*100).toFixed(1)+'%'} },
+    { id:'ml',       x:W*0.28, y:H/2, r:19, color:'#3b82f6',
+      label:'ML Engine', sub:'XGBoost+LSTM',
+      details:{'Model':'XGBoost+LSTM Ensemble','Prediction':attackType,'Confidence':((r.confidence||0)*100).toFixed(1)+'%','Threshold':'60%'} },
+    { id:'council',  x:W*0.50, y:H/2, r:22, color:'#a855f7',
+      label:'AI Council', sub:'3-Agent Vote',
+      details:{'Analyst':(r.agent_votes||{}).analyst||'N/A','Engineer':(r.agent_votes||{}).engineer||'N/A','Intel':(r.agent_votes||{}).intel||'N/A','Severity':r.council_severity||'N/A','Consensus':r.council_consensus?(r.council_consensus*100).toFixed(0)+'%':'N/A'} },
+    { id:'defender', x:W*0.72, y:H/2, r:19, color:'#f59e0b',
+      label:'RL Defender', sub:clamp(finalAction.replace(/_/g,' '),14),
+      details:{'Initial':r.rl_action||'N/A','Final':finalAction,'Re-eval':r.final_rl_action&&r.final_rl_action!==r.rl_action?'Yes ✓':'No','FP Risk':r.false_positive_risk||'N/A'} },
+    { id:'target',   x:W*0.92, y:H/2, r:22, color: finalAction==='BLOCK_SOURCE'?'#10b981':'#ef4444',
+      label:'Target', sub:clamp(dstIp,14)+':'+dstPort,
+      details:{'Destination':dstIp,'Port':dstPort,'Server':r.server_id||'N/A','Status':finalAction==='BLOCK_SOURCE'?'🛡 Protected':'⚠ At Risk'} },
+  ];
+
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs={}) => {
+    const el = document.createElementNS(ns, tag);
+    Object.entries(attrs).forEach(([k,v]) => el.setAttribute(k, v));
+    return el;
+  };
+  const mkTxt = (txt, attrs={}) => { const el = mk('text', attrs); el.textContent = txt; return el; };
+
+  // ── Edges ────────────────────────────────────────
+  const edgeLabels = [attackType, 'Detected', 'Council', finalAction.replace(/_/g,' ')];
+  const edgeColors = ['#e2001a88','#3b82f688','#a855f788', finalAction==='BLOCK_SOURCE'?'#10b98188':'#f59e0b88'];
+  for (let i = 0; i < nodes.length - 1; i++) {
+    const n1 = nodes[i], n2 = nodes[i+1];
+    const x1 = n1.x + n1.r, x2 = n2.x - n2.r;
+    svgEl.appendChild(mk('line', {x1, y1:n1.y, x2, y2:n2.y,
+      stroke:edgeColors[i], 'stroke-width':'1.5',
+      'stroke-dasharray':'5 4', class:'flow-edge'}));
+    const ax = x2 - 1;
+    svgEl.appendChild(mk('polygon', {
+      points:`${ax},${n1.y} ${ax-7},${n1.y-3.5} ${ax-7},${n1.y+3.5}`,
+      fill:edgeColors[i]}));
+    const lbl = clamp(edgeLabels[i], 12);
+    svgEl.appendChild(mkTxt(lbl, {x:(x1+x2)/2, y:n1.y-10,
+      'text-anchor':'middle', fill:'#475569',
+      'font-size':'8', 'font-family':'JetBrains Mono,monospace'}));
+  }
+
+  // ── Nodes ────────────────────────────────────────
+  nodes.forEach(n => {
+    const g = mk('g', {class:'graph-node', 'data-node-id':n.id});
+    g.appendChild(mk('circle', {cx:n.x, cy:n.y, r:n.r+7, fill:n.color+'18', stroke:'none'}));
+    g.appendChild(mk('circle', {cx:n.x, cy:n.y, r:n.r, fill:n.color+'26', stroke:n.color, 'stroke-width':'1.5'}));
+    g.appendChild(mkTxt(n.label, {x:n.x, y:n.y-n.r-9, 'text-anchor':'middle',
+      fill:'#e2e8f0', 'font-size':'9', 'font-weight':'600', 'font-family':'Inter,sans-serif'}));
+    g.appendChild(mkTxt(n.sub, {x:n.x, y:n.y+n.r+13, 'text-anchor':'middle',
+      fill:n.color, 'font-size':'8', 'font-family':'JetBrains Mono,monospace'}));
+    g.addEventListener('click', e => { e.stopPropagation(); showNodePopup(n, svgEl, popupId); });
+    svgEl.appendChild(g);
+  });
+
+  svgEl.addEventListener('click', () => hideNodePopup(popupId));
+}
+
+function showNodePopup(node, svgEl, popupId) {
+  const popup = document.getElementById(popupId);
+  if (!popup) return;
+  const rows = Object.entries(node.details).map(([k,v]) =>
+    `<div class="flex justify-between gap-2 border-b border-cyber-border pb-1 last:border-0 last:pb-0">
+      <span style="color:#475569;white-space:nowrap">${k}</span>
+      <span style="color:#e2e8f0;font-family:JetBrains Mono,monospace;font-size:0.9em;text-align:right">${v}</span>
+    </div>`
+  ).join('');
+  popup.innerHTML = `
+    <div style="color:${node.color};font-size:9px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:6px">${node.label}</div>
+    <div style="display:flex;flex-direction:column;gap:4px;font-size:10px">${rows}</div>`;
+  const svgRect = svgEl.getBoundingClientRect();
+  const W = svgEl.viewBox.baseVal.width || svgRect.width;
+  const H = svgEl.viewBox.baseVal.height || svgRect.height;
+  let lx = (node.x / W) * svgRect.width + 10;
+  let ty = (node.y / H) * svgRect.height - 50;
+  if (lx + 220 > svgRect.width) lx = (node.x / W) * svgRect.width - 230;
+  if (ty < 0) ty = (node.y / H) * svgRect.height + 30;
+  popup.style.cssText = `position:absolute;left:${lx}px;top:${ty}px;opacity:1;pointer-events:auto;z-index:50`;
+}
+
+function hideNodePopup(popupId) {
+  const p = document.getElementById(popupId || 'graph-node-popup');
+  if (p) { p.style.opacity = '0'; p.style.pointerEvents = 'none'; }
+}
+
+function expandGraph() {
+  if (!graphDataForExpand) return;
+  document.getElementById('graph-fullscreen').classList.add('active');
+  setTimeout(() => buildAttackGraph(graphDataForExpand, 'graph-fs-svg', 'graph-fs-popup'), 80);
+}
+
+function closeExpandedGraph() {
+  document.getElementById('graph-fullscreen').classList.remove('active');
+  hideNodePopup('graph-fs-popup');
 }
 
 // ═══════════════════ LIVE REPORT STREAM ═══════════════════
@@ -1068,6 +1497,11 @@ function startReportStream() {
         // Find the existing base record written by the Defender and update it.
         const existing = allReports.find(r => r.flow_id === rec.flow_id);
         if (existing) {
+          // The patch uses 'council_' prefixed keys, map them to what the UI expects
+          if (rec.council_signature) existing.signature_match = rec.council_signature;
+          if (rec.council_threat_actor) existing.threat_actor_type = rec.council_threat_actor;
+          if (rec.council_fp_risk) existing.false_positive_risk = rec.council_fp_risk;
+          
           Object.assign(existing, rec);
           filterReports(); // re-render table to show new severity/council
         }
@@ -1239,5 +1673,19 @@ function showToast(msg, type='success') {
 
 boot();
 </script>
+<!-- ═══════════════════ FULLSCREEN GRAPH OVERLAY ═══════════════════ -->
+<div id="graph-fullscreen" onclick="if(event.target===this)closeExpandedGraph()">
+  <div style="position:absolute;top:20px;right:24px;z-index:1">
+    <button onclick="closeExpandedGraph()" style="background:#141820;border:1px solid #1e2530;color:#94a3b8;padding:6px 14px;border-radius:6px;font-size:11px;font-family:JetBrains Mono,monospace;cursor:pointer;letter-spacing:0.05em" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#94a3b8'">✕ Close</button>
+  </div>
+  <div style="text-align:center;margin-bottom:24px">
+    <div style="font-size:9px;color:#475569;letter-spacing:0.15em;text-transform:uppercase;font-family:JetBrains Mono,monospace">Attack Path · Expanded View</div>
+  </div>
+  <div style="position:relative;background:#080a0d;border:1px solid #1e2530;border-radius:12px;overflow:hidden;padding:16px">
+    <svg id="graph-fs-svg" style="display:block"></svg>
+    <div id="graph-fs-popup" style="position:absolute;opacity:0;pointer-events:none;background:#141820;border:1px solid #1e2530;border-radius:8px;padding:12px;min-width:180px;max-width:240px;box-shadow:0 8px 32px rgba(0,0,0,0.5);font-size:10px"></div>
+  </div>
+  <div style="margin-top:16px;font-size:9px;color:#374151;font-family:JetBrains Mono,monospace">Click any node for details · Click outside to close</div>
+</div>
 </body>
 </html>

@@ -106,19 +106,37 @@ class LLMClient:
         """
         Universal generate method.
         provider: 'groq' | 'ollama' | 'lmstudio' | 'hf'
+
+        Auto-fallback: if a local provider (ollama / lmstudio) returns an error
+        string (timeout, not running, etc.), the call is automatically retried
+        on Groq with llama-3.1-8b-instant.  This means council sessions always
+        complete with useful output even when local models are slow or busy.
         """
         p = provider.lower()
         if p == 'groq':
             return self._generate_groq(prompt, model, max_tokens, temperature)
         elif p == 'ollama':
-            return self._generate_ollama(prompt, model, max_tokens, temperature)
+            result = self._generate_ollama(prompt, model, max_tokens, temperature)
         elif p == 'lmstudio':
-            return self._generate_lmstudio(prompt, model, max_tokens, temperature)
+            result = self._generate_lmstudio(prompt, model, max_tokens, temperature)
         elif p == 'hf':
             return self._generate_huggingface(prompt, model, max_tokens, temperature)
         else:
             logger.error(f"Unknown provider: {provider}")
             return f"Error: Invalid LLM provider '{provider}'"
+
+        # ── Groq fallback for local providers ───────────────────────────────
+        # If the local call timed out or returned an error, retry on Groq so
+        # the council always has all 3 agent votes available.
+        if result.startswith("Error:") and self.groq_client:
+            logger.warning(
+                f"[Council] {provider}:{model} failed — falling back to "
+                f"groq:llama-3.1-8b-instant"
+            )
+            result = self._generate_groq(
+                prompt, "llama-3.1-8b-instant", max_tokens, temperature
+            )
+        return result
     
     def _generate_groq(self, prompt: str, model: str, max_tokens: int, temperature: float) -> str:
         """Generate using Groq"""
@@ -140,28 +158,23 @@ class LLMClient:
     def _generate_ollama(self, prompt: str, model: str, max_tokens: int, temperature: float) -> str:
         """Generate using Ollama."""
         try:
-            # Disable thinking mode for qwen3 — /nothink prevents the model from
-            # entering its extended reasoning phase which can take minutes per call.
-            # We need fast structured JSON, not a lengthy chain-of-thought.
-            adjusted_prompt = prompt + "\n/nothink" if "qwen3" in model.lower() else prompt
-
             response = requests.post(
-                f'{self.ollama_base_url}/api/generate',
+                f'{self.ollama_base_url}/api/chat',
                 json={
                     'model': model,
-                    'prompt': adjusted_prompt,
+                    'messages': [{'role': 'user', 'content': prompt}],
                     'stream': False,
                     'options': {
                         'temperature': temperature,
                         'num_predict': max_tokens,
                     },
                 },
-                timeout=30,  # was 180s — fail fast so the semaphore slot frees up
+                timeout=90,
             )
             if response.status_code == 200:
-                return response.json()['response']
+                return response.json()['message']['content']
             else:
-                logger.error(f"Ollama error: {response.text}")
+                logger.error(f"Ollama error {response.status_code}: {response.text}")
                 return f"Error: Ollama returned {response.status_code}"
         except Exception as e:
             logger.error(f"Ollama generation failed: {e}")
@@ -171,9 +184,9 @@ class LLMClient:
         """
         Generate using LM Studio (OpenAI-compatible REST at localhost:1234/v1).
         Does a fast connectivity check first (1s) so we fail in ~1s instead of
-        waiting 120s when LM Studio isn't running.
+        waiting 45s when LM Studio isn't running.
         """
-        # Fast connectivity probe — avoids burning 120s on a dead port
+        # Fast connectivity probe — avoids burning 45s on a dead port
         try:
             requests.get(f'{self.lmstudio_base_url}/models', timeout=1)
         except Exception:
@@ -190,7 +203,7 @@ class LLMClient:
             response = requests.post(
                 f'{self.lmstudio_base_url}/chat/completions',
                 json=payload,
-                timeout=8,   # was 120s — LM Studio responds fast or not at all
+                timeout=45,   # 45s: qwen2.5-coder-7b needs 20-30s on CPU
             )
             if response.status_code == 200:
                 return response.json()['choices'][0]['message']['content']
@@ -410,6 +423,12 @@ class ThreatAnalysisCouncil:
             "analyst":  analyst,
             "engineer": engineer,
             "intel":    intel,
+            # Raw LLM text for the UI sidebar
+            "raw_responses": {
+                "analyst": analyst_raw.get('analysis', ''),
+                "engineer": engineer_raw.get('analysis', ''),
+                "intel": intel_raw.get('analysis', '')
+            }
         }
 
         logger.info("\u2713 Council complete")

@@ -23,7 +23,7 @@ from src.agents.kernel_executor import KernelExecutor
 logger = logging.getLogger(__name__)
 
 
-def _write_council_patch(server_id: str, flow_id: str, council_result: dict):
+def _write_council_patch(server_id: str, flow_id: str, council_result: dict, rl_action: str = None, rl_action_id: int = None, commands: list = None, command_comments: list = None):
     """
     Append a council_update record to the per-server JSONL file.
 
@@ -36,7 +36,10 @@ def _write_council_patch(server_id: str, flow_id: str, council_result: dict):
     from pathlib import Path
     from datetime import datetime, timezone
 
-    path = Path("reports/actions") / f"{server_id}_actions.jsonl"
+    reports_dir = Path("reports/actions")
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    fpath = reports_dir / f"{server_id}_actions.jsonl"
+
     patch = {
         "_type": "council_update",
         "flow_id": flow_id,
@@ -50,9 +53,20 @@ def _write_council_patch(server_id: str, flow_id: str, council_result: dict):
         "council_fp_risk":        council_result.get("false_positive_risk", ""),
         "agent_votes":            council_result.get("agent_votes", {}),
         "timestamp_utc":          datetime.now(timezone.utc).isoformat(),
+        "raw_responses":          council_result.get("raw_responses", {}),
     }
+    
+    if rl_action is not None:
+        patch["final_rl_action"] = rl_action
+    if rl_action_id is not None:
+        patch["rl_action_id"] = rl_action_id
+    if commands is not None:
+        patch["commands"] = commands
+    if command_comments is not None:
+        patch["command_comments"] = command_comments
+
     try:
-        with path.open("a", encoding="utf-8") as f:
+        with open(fpath, "a") as f:
             f.write(_json.dumps(patch) + "\n")
     except Exception as e:
         logger.error(f"[Council] Failed to write council patch for {flow_id}: {e}")
@@ -147,7 +161,11 @@ class FlowIngestionStage:
                 t_start = time.perf_counter()
 
                 # Build one DataFrame for the whole batch — far cheaper than N DataFrames
-                rows = [msg.features for msg in batch]
+                # Strip leading/trailing spaces from feature names to match preprocessor
+                rows = [
+                    {k.strip(): v for k, v in msg.features.items()}
+                    for msg in batch
+                ]
                 df = pd.DataFrame(rows)
                 df = df.apply(pd.to_numeric, errors="coerce")
                 df = df.fillna(0.0)
@@ -265,13 +283,20 @@ class EnsembleDetectionStage:
                     lstm_out = self.detector.lstm_model(features_tensor)
                     lstm_probs = torch.softmax(lstm_out, dim=1).numpy()  # (N, C_lstm)
 
-                # Pad to same class count and ensemble
-                C = max(xgb_probs.shape[1], lstm_probs.shape[1])
-                if xgb_probs.shape[1] < C:
-                    xgb_probs = np.pad(xgb_probs, ((0, 0), (0, C - xgb_probs.shape[1])))
-                if lstm_probs.shape[1] < C:
-                    lstm_probs = np.pad(lstm_probs, ((0, 0), (0, C - lstm_probs.shape[1])))
-                final_probs = (0.7 * xgb_probs) + (0.3 * lstm_probs)  # (N, C)
+                # Ensemble: only combine when class counts match.
+                # If LSTM was initialized with wrong num_classes (e.g. random
+                # weights from the old 10-class traffic model) padding XGBoost
+                # probs to 10 classes and mixing in uniform LSTM noise would
+                # dilute every DDoS/PortScan confidence below the 0.6 threshold,
+                # causing all threats to be silently routed to the benign queue.
+                if xgb_probs.shape[1] == lstm_probs.shape[1]:
+                    final_probs = (0.7 * xgb_probs) + (0.3 * lstm_probs)  # (N, C)
+                else:
+                    logger.warning(
+                        f"[Detection] LSTM class count ({lstm_probs.shape[1]}) != "
+                        f"XGBoost ({xgb_probs.shape[1]}) — using XGBoost only"
+                    )
+                    final_probs = xgb_probs  # (N, C_xgb) — no noise dilution
 
                 pred_indices = np.argmax(final_probs, axis=1)          # (N,)
                 confidences = final_probs[np.arange(len(batch)), pred_indices]
@@ -350,7 +375,7 @@ class ThreatCouncilStage:
         self.decisions_producer = decisions_producer
         self._analyzed = 0
         # Rate-limit LLM calls so they don't monopolise the thread-pool executor.
-        self._semaphore = asyncio.Semaphore(1)  # serialize LLM calls — free-tier Groq has tight TPM limits
+        self._semaphore = asyncio.Semaphore(5)  # serialize LLM calls — free-tier Groq has tight TPM limits
 
         self._pending_tasks: set = set()
 
@@ -448,16 +473,14 @@ class ThreatCouncilStage:
 
                     # ── Write council patch to JSONL so Threat Reports table updates ──
                     # The defender already wrote an initial record with severity=pending.
-                    # We append a _type:council_update record that the frontend merges
-                    # into the existing row by matching flow_id.
-                    await loop.run_in_executor(
-                        None,
-                        lambda: _write_council_patch(
-                            server_id=msg.server_id,
-                            flow_id=msg.flow_id,
-                            council_result=council_result,
-                        )
-                    )
+                    # We forward it again so the RL agent can re-evaluate with the
+                    # LLM's highly accurate consensus, and write the council_update patch.
+                    await self.defender_queue.put({
+                        **item,
+                        "council_result": council_result,
+                        "is_re_evaluation": True,
+                        "t_council_done": time.perf_counter(),
+                    })
 
             except Exception as e:
                 logger.error(f"[Council] LLM enrichment error for {msg.flow_id}: {e}")
@@ -543,15 +566,23 @@ class DefenderStage:
         attack_type = item.get("attack_type", "BENIGN")
         council_result = item.get("council_result")  # None if LLM still enriching
         t_ingested = item.get("t_ingested", time.perf_counter())
+        is_re_evaluation = item.get("is_re_evaluation", False)
 
         try:
             if attack_type == "BENIGN":
                 action = "ALLOW"
                 action_result = {"action": "ALLOW", "action_id": -1, "status": "allowed"}
             else:
+                if is_re_evaluation and council_result:
+                    confidence = council_result.get("confidence", confidence)
+                    council_sev = council_result.get("severity", "Medium")
+                    threat_level = "High" if council_sev in ["High", "Critical"] else council_sev
+                else:
+                    threat_level = "High" if confidence > 0.8 else "Medium"
+                    
                 perception = {
                     "confidence": confidence,
-                    "threat_level": "High" if confidence > 0.8 else "Medium",
+                    "threat_level": threat_level,
                     "flow_rate": float(msg.features.get("Flow Packets/s", 0)),
                 }
                 obs = self.defender.observe(perception)
@@ -582,29 +613,49 @@ class DefenderStage:
             # Runs in a thread executor so file I/O doesn't block the event loop.
             if attack_type != "BENIGN":
                 src_ip = msg.features.get("Src IP") or msg.features.get("src_ip")
+                src_ip_str = str(src_ip) if src_ip else None
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(
-                    None,
-                    lambda: self._executor.execute(
-                        flow_id=msg.flow_id,
-                        server_id=msg.server_id,
-                        geo_region=getattr(msg, "geo_region", "unknown"),
-                        attack_type=attack_type,
-                        confidence=confidence,
-                        rl_action=action,
-                        rl_action_id=action_result.get("action_id", 0),
-                        latency_ms=end_to_end_ms,
-                        council_result=council_result,
-                        src_ip=str(src_ip) if src_ip else None,
-                    ),
-                )
+                
+                if is_re_evaluation:
+                    commands, comments = self._executor._build_commands(action, src_ip_str, msg.flow_id)
+                    if not self._executor.dry_run and src_ip_str and src_ip_str != "N/A (not in flow features)":
+                        await loop.run_in_executor(None, lambda: self._executor._run_commands(commands))
+                    
+                    await loop.run_in_executor(
+                        None,
+                        lambda: _write_council_patch(
+                            server_id=msg.server_id,
+                            flow_id=msg.flow_id,
+                            council_result=council_result,
+                            rl_action=action,
+                            rl_action_id=action_result.get("action_id", 0),
+                            commands=commands,
+                            command_comments=comments
+                        )
+                    )
+                else:
+                    await loop.run_in_executor(
+                        None,
+                        lambda: self._executor.execute(
+                            flow_id=msg.flow_id,
+                            server_id=msg.server_id,
+                            geo_region=getattr(msg, "geo_region", "unknown"),
+                            attack_type=attack_type,
+                            confidence=confidence,
+                            rl_action=action,
+                            rl_action_id=action_result.get("action_id", 0),
+                            latency_ms=end_to_end_ms,
+                            council_result=council_result,
+                            src_ip=src_ip_str,
+                        ),
+                    )
 
             # ── Kafka decisions topic ─────────────────────────────────────────
             if self.kafka_producer:
                 from src.kafka.schemas import DefenseDecisionMessage
                 decision = DefenseDecisionMessage(
                     server_id=msg.server_id,
-                    geo_region=msg.geo_region,
+                    geo_region=getattr(msg, "geo_region", "unknown"),
                     flow_id=msg.flow_id,
                     attack_type=attack_type,
                     confidence=confidence,

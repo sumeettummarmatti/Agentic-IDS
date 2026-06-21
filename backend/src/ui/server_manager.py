@@ -31,7 +31,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
     from fastapi.responses import HTMLResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from fastapi.middleware.cors import CORSMiddleware
@@ -196,9 +196,10 @@ if HAS_FASTAPI:
     @app.get("/api/stats")
     def get_stats():
         lat = pipeline_stats.get("latency", {})
+        all_servers = registry.to_api_list()
         return {
-            "servers": registry.to_api_list(),
-            "active_servers": len(registry.get_active()),
+            "servers": all_servers,
+            "active_servers": len(all_servers),  # all registered, not just heartbeat
             "pipeline": pipeline_stats,
             "total_threats": pipeline_stats.get("threats", 0),
             "total_flows": lat.get("count", 0),
@@ -214,8 +215,10 @@ if HAS_FASTAPI:
         async def event_generator():
             while True:
                 lat = pipeline_stats.get("latency", {})
+                all_servers = registry.to_api_list()
                 data = json.dumps({
-                    "servers": registry.to_api_list(),
+                    "servers": all_servers,
+                    "active_servers": len(all_servers),  # all registered servers
                     "pipeline": pipeline_stats,
                     "total_threats": pipeline_stats.get("threats", 0),
                     "total_flows": lat.get("count", 0),
@@ -232,6 +235,127 @@ if HAS_FASTAPI:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @app.post("/api/restore-session")
+    def restore_session():
+        """
+        Re-register servers found in reports/actions/*.jsonl into the in-memory
+        registry after a server restart. Reads each JSONL file, grabs the first
+        record's server metadata, and registers it with a pinned heartbeat so
+        the server appears as 'alive' on the dashboard.
+        """
+        import glob as _glob, json as _json
+        from pathlib import Path
+        from src.kafka.schemas import ServerRegistration
+        from datetime import timedelta
+
+        reports_dir = Path("reports/actions")
+        restored, seen = [], set()
+
+        # lat/lon lookup by geo_region (covers all presets + docker seeds)
+        _coords = {
+            "asia-south1":          (19.076,  72.877),
+            "us-east1":             (38.0,   -78.0),
+            "europe-west2":         (51.507,  -0.127),
+            "asia-south2":          (28.704,  77.102),
+            "asia-southeast1":      (1.352,  103.820),
+            "asia-northeast1":      (35.689, 139.692),
+            "europe-west3":         (50.110,   8.682),
+            "us-west1":             (45.523,-122.675),
+            "australia-southeast1": (-33.868, 151.209),
+            "southamerica-east1":   (-23.550, -46.633),
+        }
+
+        for fpath in _glob.glob(str(reports_dir / "*_actions.jsonl")):
+            try:
+                with open(fpath, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            rec = _json.loads(line)
+                        except Exception:
+                            continue
+                        sid = rec.get("server_id")
+                        if not sid or sid in seen:
+                            break
+                        seen.add(sid)
+                        geo_region = rec.get("geo_region", "unknown")
+                        geo_label  = rec.get("geo_label", sid)
+                        lat, lon   = _coords.get(geo_region, (0.0, 0.0))
+                        reg = ServerRegistration(
+                            server_id=sid, geo_region=geo_region,
+                            geo_label=geo_label, lat=lat, lon=lon,
+                            ip="cached", interface="cached", event="register",
+                        )
+                        registry.register(reg)
+                        # Pin heartbeat 1 year out so it never expires
+                        registry._last_heartbeat[sid] = (
+                            datetime.now(timezone.utc) + timedelta(days=365)
+                        )
+                        restored.append(sid)
+                        break   # one record per file is enough
+            except Exception as ex:
+                logger.warning(f"[UI] restore-session: error reading {fpath}: {ex}")
+
+        logger.info(f"[UI] Session restore: re-registered {len(restored)} server(s): {restored}")
+        
+        # ── Group by flow_id to find truly pending threats ──
+        merged_records = {}
+        for fpath in _glob.glob(str(reports_dir / "*_actions.jsonl")):
+            try:
+                with open(fpath, "r") as f:
+                    for line in f:
+                        try:
+                            rec = _json.loads(line.strip())
+                            fid = rec.get("flow_id")
+                            if fid:
+                                if fid not in merged_records:
+                                    merged_records[fid] = {}
+                                merged_records[fid].update(rec)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+                
+        pending_flows = [
+            r for r in merged_records.values() 
+            if r.get("council_severity") == "Pending LLM enrichment"
+        ]
+        
+        # ── Inject pending flows directly into the council threat_queue ──
+        queued_count = 0
+        from src.kafka.schemas import ThreatAlertMessage
+        if pipeline and pipeline.threat_queue:
+            for rec in pending_flows:
+                msg = ThreatAlertMessage(
+                    server_id=rec.get("server_id", "unknown"),
+                    geo_region=rec.get("geo_region", "unknown"),
+                    flow_id=rec.get("flow_id", "unknown"),
+                    attack_type=rec.get("attack_type", "Unknown"),
+                    confidence=rec.get("confidence", 1.0),
+                    severity="Medium",
+                    raw_features={} # No features available in cache
+                )
+                try:
+                    pipeline.threat_queue.put_nowait({
+                        "msg": msg,
+                        "attack_type": msg.attack_type,
+                        "confidence": msg.confidence,
+                        "X": None
+                    })
+                    queued_count += 1
+                except Exception:
+                    pass
+
+        logger.info(f"[UI] Queued {queued_count} pending threats to Council.")
+        return {
+            "status": "restored",
+            "servers_restored": restored,
+            "pending_queued": queued_count,
+            "total_servers": len(registry.to_api_list()),
+        }
 
     @app.get("/api/pipeline/stream")
     async def pipeline_stream():
@@ -258,8 +382,8 @@ if HAS_FASTAPI:
         )
 
     @app.delete("/api/cache")
-    def clear_cache():
-        """Clear all report files so the dashboard starts fresh."""
+    def clear_cache(background_tasks: BackgroundTasks):
+        """Clear all report files and completely restart the backend process."""
         import glob
         from pathlib import Path
         reports_dir = Path("reports/actions")
@@ -270,7 +394,15 @@ if HAS_FASTAPI:
                 removed += 1
             except Exception:
                 pass
-        return {"status": "cleared", "files_removed": removed}
+
+        def restart_server():
+            import time, sys, os
+            time.sleep(1.0)
+            logger.warning("[UI] Restarting backend server for fresh session...")
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+        background_tasks.add_task(restart_server)
+        return {"status": "cleared", "files_removed": removed, "message": "Server restarting..."}
 
     # ── Reports API ──────────────────────────────────────────
 
@@ -311,6 +443,13 @@ if HAS_FASTAPI:
                 
                 if rec.get("_type") == "council_update":
                     if fid in merged_records:
+                        # Map council_ fields to UI fields
+                        if "council_signature" in rec:
+                            merged_records[fid]["signature_match"] = rec["council_signature"]
+                        if "council_threat_actor" in rec:
+                            merged_records[fid]["threat_actor_type"] = rec["council_threat_actor"]
+                        if "council_fp_risk" in rec:
+                            merged_records[fid]["false_positive_risk"] = rec["council_fp_risk"]
                         merged_records[fid].update(rec)
                     else:
                         merged_records[fid] = rec
@@ -396,6 +535,182 @@ if HAS_FASTAPI:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+    @app.post("/api/summarize-threat")
+    async def summarize_threat(request: Request):
+        """
+        Generates an Incident Response Plan locally using extractive summarization.
+        Uses sumy TextRank to extract key sentences from each agent transcript,
+        then templates the structured threat data into a rich markdown report.
+        No LLM API call — instant, deterministic, offline-capable.
+        """
+        try:
+            data = await request.json()
+
+            # ── Core threat fields ────────────────────────────────────────────
+            flow_id          = data.get("flow_id", "Unknown")
+            attack_type      = data.get("attack_type", "Unknown")
+            initial_action   = data.get("rl_action", "Unknown")
+            final_action     = data.get("final_rl_action") or initial_action
+            confidence       = data.get("confidence", 0)
+            severity         = data.get("council_severity", "Unknown")
+            council_consensus= data.get("council_consensus", 0)
+            fp_risk          = data.get("false_positive_risk", "Unknown")
+            signature        = data.get("signature_match", "N/A")
+            threat_actor     = data.get("threat_actor_type", "Unknown")
+            all_indicators   = data.get("all_indicators", [])
+            agent_votes      = data.get("agent_votes", {})
+            raw_responses    = data.get("raw_responses", {})
+            server_id        = data.get("server_id", "Unknown")
+            geo_label        = data.get("geo_label", "")
+            latency_ms       = data.get("latency_ms", 0)
+
+            # ── Extractive summarizer (sumy TextRank, fallback to first sentences) ──
+            def extractive_summary(text: str, n: int = 3) -> str:
+                if not text or len(text.strip()) < 60:
+                    return "_No transcript available for this agent._"
+                try:
+                    from sumy.parsers.plaintext import PlaintextParser
+                    from sumy.nlp.tokenizers import Tokenizer
+                    from sumy.summarizers.text_rank import TextRankSummarizer
+                    from sumy.nlp.stemmers import Stemmer
+                    from sumy.utils import get_stop_words
+                    parser = PlaintextParser.from_string(
+                        text.replace('\n', ' '), Tokenizer("english")
+                    )
+                    stemmer = Stemmer("english")
+                    summarizer = TextRankSummarizer(stemmer)
+                    summarizer.stop_words = get_stop_words("english")
+                    sentences = summarizer(parser.document, n)
+                    result = " ".join(str(s) for s in sentences).strip()
+                    return result if result else _fallback_summary(text, n)
+                except Exception:
+                    return _fallback_summary(text, n)
+
+            def _fallback_summary(text: str, n: int = 3) -> str:
+                """First-N-sentences fallback when sumy is unavailable."""
+                import re
+                sents = re.split(r'(?<=[.!?])\s+', text.strip())
+                chosen = [s.strip() for s in sents if len(s.strip()) > 20][:n]
+                return " ".join(chosen) if chosen else text[:350].strip() + "…"
+
+            # ── Summarize each agent ─────────────────────────────────────────
+            analyst_sum  = extractive_summary(raw_responses.get("analyst",  ""), 3)
+            engineer_sum = extractive_summary(raw_responses.get("engineer", ""), 3)
+            intel_sum    = extractive_summary(raw_responses.get("intel",    ""), 3)
+
+            # ── Derived fields ───────────────────────────────────────────────
+            re_evaluated  = final_action != initial_action
+            src_ip = flow_id.split('-')[0] if '-' in flow_id else '?'
+            dst_ip = flow_id.split('-')[1] if '-' in flow_id and len(flow_id.split('-')) > 1 else '?'
+            dst_port = flow_id.split('-')[3] if '-' in flow_id and len(flow_id.split('-')) > 3 else '?'
+
+            indicators_md = "\n".join(f"- `{i}`" for i in all_indicators) \
+                            if all_indicators else "- _No specific indicators extracted_"
+
+            action_rationale = (
+                f"After the AI Council elevated severity to **{severity}**, "
+                f"the RL Defender **upgraded its response** from `{initial_action}` → `{final_action}`."
+                if re_evaluated else
+                f"The RL Defender **confirmed** its pre-Council decision of `{final_action}`, "
+                f"consistent with the Council's **{severity}** classification."
+            )
+
+            risk_badge = {
+                "Critical": "🔴 **CRITICAL** — Immediate escalation required.",
+                "High":     "🟠 **HIGH** — Investigate within 1 hour.",
+                "Medium":   "🟡 **MEDIUM** — Investigate during business hours.",
+                "Low":      "🟢 **LOW** — Log and monitor. No immediate action required.",
+            }.get(severity, "⚪ **UNKNOWN** — Manual review required.")
+
+            votes_md = "\n".join([
+                f"| Security Analyst | `{agent_votes.get('analyst', 'N/A')}` |",
+                f"| ML Engineer      | `{agent_votes.get('engineer','N/A')}` |",
+                f"| Threat Intel     | `{agent_votes.get('intel',   'N/A')}` |",
+            ])
+
+            # ── Build the markdown report ─────────────────────────────────────
+            report = f"""# Incident Response Plan
+
+> **Agentic-IDS** · Server `{server_id}` {("· " + geo_label) if geo_label else ""} · E2E latency `{latency_ms:.0f}ms`
+
+---
+
+## 1. Threat Summary
+
+The ML Ensemble (XGBoost + LSTM) classified flow `{flow_id}` as a **{attack_type}** attack with **{confidence*100:.1f}%** confidence. The three-agent AI Council reached **{council_consensus*100:.0f}% consensus** and classified severity as **{severity}**. The RL Defender responded with **`{final_action}`**.
+
+---
+
+## 2. Attack Path
+
+| Field | Value |
+|---|---|
+| Source IP | `{src_ip}` |
+| Destination | `{dst_ip}:{dst_port}` |
+| Attack Type | **{attack_type}** |
+| ML Confidence | **{confidence*100:.1f}%** |
+| Signature Match | `{signature}` |
+| Threat Actor Type | {threat_actor} |
+| FP Risk | **{fp_risk}** |
+
+---
+
+## 3. AI Council Deliberation
+
+| Agent | Vote |
+|---|---|
+{votes_md}
+
+**Security Analyst** (LM Studio local model):
+> {analyst_sum}
+
+**ML Engineer** (Ollama local model):
+> {engineer_sum}
+
+**Threat Intel** (Groq cloud model):
+> {intel_sum}
+
+---
+
+## 4. Defender Actions
+
+{action_rationale}
+
+| Stage | Action |
+|---|---|
+| RL Stage 1 — Pre-Council  | `{initial_action}` |
+| RL Stage 2 — Post-Council | `{final_action}` |
+
+---
+
+## 5. Threat Indicators
+
+{indicators_md}
+
+---
+
+## 6. Recommended Next Steps
+
+1. **Verify** the `{final_action}` action was applied successfully on `{dst_ip}:{dst_port}`
+2. **Investigate** source `{src_ip}` for prior threat history and lateral movement
+3. **Review** detection signatures for **{attack_type}** patterns to reduce false positives (FP risk: `{fp_risk}`)
+4. **Update** blocklists and IDS rules based on the indicators above
+5. **Escalate** to SOC Tier 2 if the threat persists or more flows from `{src_ip}` are detected
+
+---
+
+## 7. Risk Assessment
+
+{risk_badge}
+
+> Council Consensus: **{council_consensus*100:.0f}%** · Severity: **{severity}** · FP Risk: **{fp_risk}**
+"""
+            return {"status": "success", "summary": report}
+
+        except Exception as e:
+            logger.error(f"Error summarizing threat: {e}")
+            return {"status": "error", "message": str(e)}
+
 
     # ── Dashboard HTML ────────────────────────────────────────
 

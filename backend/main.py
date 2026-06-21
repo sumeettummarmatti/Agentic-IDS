@@ -59,46 +59,113 @@ def parse_args():
     return parser.parse_args()
 
 
-def build_components(provider: str):
-    """Initialise and train all IDS components. Returns (detector, council, defender, preprocessor)."""
-    logger.info("\n[PHASE 1] Initialising IDS components…")
 
-    detector = EnsembleDetector(use_lstm=True)
-    council = ThreatAnalysisCouncil(provider=provider)
+def _all_models_exist() -> bool:
+    """Return True only if every required model file is present on disk."""
+    from pathlib import Path
+    required = [
+        Path('models/trained/xgboost_multiclass.pkl'),
+        Path('models/trained/class_mapping.pkl'),
+        Path('models/trained/lstm_detector.pt'),
+        Path('models/trained/preprocessor.pkl'),
+        Path('models/defender_ppo.zip'),
+    ]
+    return all(p.exists() for p in required)
+
+
+def _load_components(provider: str):
+    """Fast path: load all trained artefacts from disk — no CSV read, no training."""
+    logger.info("[PHASE 1] Loading saved models from disk (fast path)…")
+
+    preprocessor = Preprocessor.load('models/trained/preprocessor.pkl')
+    detector     = EnsembleDetector(use_lstm=True)
+    # Sync the scaler from the preprocessor into the detector (used by predict())
+    detector.scaler = preprocessor.scaler
+    council  = ThreatAnalysisCouncil(provider=provider)
+    # DefenderRLAgent._initialize_model() auto-loads models/defender_ppo.zip if present
     defender = DefenderRLAgent()
+
+    logger.info("✓ All components loaded from disk\n")
+    return detector, council, defender, preprocessor
+
+
+def _train_components(provider: str):
+    """Full training path: read CSV, fit preprocessor, train XGBoost + LSTM, save everything."""
+    logger.info("[PHASE 1] Training IDS components from scratch…")
+
+    detector     = EnsembleDetector(use_lstm=True)
+    council      = ThreatAnalysisCouncil(provider=provider)
+    defender     = DefenderRLAgent()
     preprocessor = Preprocessor()
 
-    # ── Load & train ──────────────────────────────────────
-    user_data_path = 'data/raw/filtered_nowebatt.csv'
+    user_data_path    = 'data/raw/filtered_nowebatt.csv'
     default_data_path = 'data/raw/Darknet.xlsx'
+    processed_dir     = 'data/processed'
 
-    if os.path.exists(user_data_path):
-        logger.info(f"Loading training data from {user_data_path}…")
-        df = preprocessor.load_data(user_data_path)
-        X, _, y = preprocessor.prepare_features_and_labels(df, training=True)
+    # ── Try processed numpy cache first (skips 117 MB CSV re-read) ──────────
+    import os
+    cache_X = os.path.join(processed_dir, 'X_train.npy')
+    cache_y = os.path.join(processed_dir, 'y_train.npy')
+
+    if os.path.exists(cache_X) and os.path.exists(cache_y):
+        logger.info(f"Loading preprocessed cache from {processed_dir}…")
+        X_train = np.load(cache_X)
+        y_train = np.load(cache_y)
+        # Restore preprocessor fit state from saved pkl if it exists (partial save)
+        pp_path = 'models/trained/preprocessor.pkl'
+        if os.path.exists(pp_path):
+            preprocessor = Preprocessor.load(pp_path)
+        else:
+            logger.warning("Preprocessor pkl missing — will refit from cache arrays (no feature names)")
     else:
-        logger.info(f"Loading training data from {default_data_path}…")
-        df = preprocessor.load_data(default_data_path)
-        X_real, _, y_real = preprocessor.prepare_features_and_labels(df, training=True)
+        # ── Load raw CSV / XLSX ─────────────────────────────────────────────
+        if os.path.exists(user_data_path):
+            logger.info(f"Loading training data from {user_data_path}…")
+            df = preprocessor.load_data(user_data_path)
+            X, _, y = preprocessor.prepare_features_and_labels(df, training=True)
+        else:
+            logger.info(f"Loading training data from {default_data_path}…")
+            df = preprocessor.load_data(default_data_path)
+            X_real, _, y_real = preprocessor.prepare_features_and_labels(df, training=True)
+            synthetic_df = generate_balanced_synthetic_dataset(num_ddos=500, num_portscan=200)
+            required_columns = preprocessor.feature_names or []
+            for col in required_columns:
+                if col not in synthetic_df.columns:
+                    synthetic_df[col] = 0
+            X_syn = synthetic_df[required_columns].values if required_columns else synthetic_df.values
+            y_syn = np.zeros(len(synthetic_df))
+            X = np.vstack([X_real, X_syn])
+            y = np.hstack([y_real, y_syn])
 
-        synthetic_df = generate_balanced_synthetic_dataset(num_ddos=500, num_portscan=200)
-        required_columns = preprocessor.feature_names or []
-        for col in required_columns:
-            if col not in synthetic_df.columns:
-                synthetic_df[col] = 0
-        X_syn = synthetic_df[required_columns].values if required_columns else synthetic_df.values
-        y_syn = np.zeros(len(synthetic_df))
+        X_train, _, y_train, _ = train_test_split(
+            X, y, test_size=0.2, stratify=y, random_state=42
+        )
 
-        X = np.vstack([X_real, X_syn])
-        y = np.hstack([y_real, y_syn])
+        # ── Save preprocessed numpy cache so next run is fast ───────────────
+        os.makedirs(processed_dir, exist_ok=True)
+        np.save(cache_X, X_train)
+        np.save(cache_y, y_train)
+        logger.info(f"✓ Saved processed arrays to {processed_dir}/")
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
+        # ── Save fitted preprocessor ────────────────────────────────────────
+        preprocessor.save('models/trained/preprocessor.pkl')
+
+    # ── Train models (XGBoost + LSTM are saved inside detector.train()) ─────
     detector.scaler = preprocessor.scaler
     detector.train(X_train, y_train)
     defender.train(total_timesteps=500)
 
-    logger.info("✓ All components initialised and trained\n")
+    logger.info("✓ All components trained and saved\n")
     return detector, council, defender, preprocessor
+
+
+def build_components(provider: str):
+    """Initialise all IDS components — loads from disk if possible, trains otherwise."""
+    if _all_models_exist():
+        return _load_components(provider)
+    return _train_components(provider)
+
+
 
 
 # ─────────────────────────────────────────────────────────────

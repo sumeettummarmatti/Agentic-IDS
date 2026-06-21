@@ -178,3 +178,41 @@ class Preprocessor:
     def transform(self, X):
         return X # Already transformed in prepare
 
+    # ── Persistence ───────────────────────────────────────────────
+
+    def save(self, path: str = 'models/trained/preprocessor.pkl'):
+        """
+        Persist all fitted pipeline components so the preprocessor can be
+        restored on the next startup without re-reading the dataset.
+        """
+        import joblib as _jl
+        from pathlib import Path as _P
+        _P(path).parent.mkdir(parents=True, exist_ok=True)
+        _jl.dump(
+            {
+                'imputer':            self.imputer,
+                'scaler':             self.scaler,
+                'variance_selector':  self.variance_selector,
+                'k_best_selector':    self.k_best_selector,
+                'feature_names':      self.feature_names,
+            },
+            path,
+        )
+        logger.info(f"✓ Preprocessor saved → {path}")
+
+    @classmethod
+    def load(cls, path: str = 'models/trained/preprocessor.pkl') -> 'Preprocessor':
+        """
+        Restore a previously fitted preprocessor from disk.
+        Returns a fully configured Preprocessor ready for transform-only calls.
+        """
+        import joblib as _jl
+        obj = cls()
+        state = _jl.load(path)
+        obj.imputer           = state['imputer']
+        obj.scaler            = state['scaler']
+        obj.variance_selector = state['variance_selector']
+        obj.k_best_selector   = state['k_best_selector']
+        obj.feature_names     = state['feature_names']
+        logger.info(f"✓ Preprocessor loaded from {path}")
+        return obj

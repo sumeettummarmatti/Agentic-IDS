@@ -8,8 +8,11 @@ import numpy as np
 from dotenv import load_dotenv
 from sklearn.model_selection import train_test_split
 
-load_dotenv(override=True)
-load_dotenv(dotenv_path='config/.env', override=True)
+# override=False: variables already present in the real environment win over .env files.
+# In Docker, compose sets KAFKA_BOOTSTRAP_SERVERS=kafka:29092; a copied .env.example
+# says localhost:9092, which would break the container if the file overrode it.
+load_dotenv(override=False)
+load_dotenv(dotenv_path='config/.env', override=False)
 
 # Support both env var names (PRIMARY_LLM_PROVIDER from existing .env, LLM_PROVIDER from new)
 def _get_provider_from_env() -> str:
@@ -50,6 +53,14 @@ def parse_args():
                         help='Number of virtual geo-servers to simulate (test mode)')
     parser.add_argument('--fps', type=float, default=0,
                         help='Flows per second per server. 0 = burst (test mode)')
+    parser.add_argument('--max-flows', type=int, default=None,
+                        help='Stop after N flows per server (test mode). Default: whole slice')
+    # ── Monitoring (production / ui modes) ─────────────────
+    parser.add_argument('--auto-monitor', type=str,
+                        default=os.getenv('AUTO_MONITOR', ''),
+                        help=("Servers to analyse right away: 'all' or comma-separated IDs "
+                              "(e.g. MUM-01,LON-01). Env: AUTO_MONITOR. Default: 'all' in "
+                              "production mode, none in ui mode (click Monitor in the dashboard)."))
     # ── Provider ───────────────────────────────────────────
     parser.add_argument('--provider', choices=['hf', 'groq', 'ollama'],
                         help='Override LLM_PROVIDER from .env')
@@ -182,6 +193,7 @@ def run_test(args, detector, council, defender, preprocessor):
         data_path=args.data,
         n_servers=args.n_servers,
         flows_per_second_per_server=args.fps,
+        max_flows_per_server=args.max_flows,
     ))
 
     logger.info("\n" + "=" * 60)
@@ -203,7 +215,7 @@ def run_production(args, detector, council, defender, preprocessor):
 
     logger.info("\n[PHASE 2] PRODUCTION MODE — Listening on Kafka…")
     logger.info("  Start AegisFlow capture server(s) to send flows.")
-    logger.info("  Open http://localhost:5001 to manage servers.\n")
+    logger.info("  (No dashboard in this mode — use --mode ui for http://localhost:5001)\n")
 
     registry = ServerRegistry()
     reg_consumer = ServerRegistryConsumer(registry)
@@ -211,8 +223,11 @@ def run_production(args, detector, council, defender, preprocessor):
 
     pipeline = IDSPipeline(detector, council, defender, preprocessor, mode='production')
 
+    # No dashboard here to click "Monitor", so analyse every server unless told otherwise.
+    auto_monitor = args.auto_monitor or 'all'
+
     try:
-        asyncio.run(pipeline.run_production(registry))
+        asyncio.run(pipeline.run_production(registry, auto_monitor=auto_monitor))
     except KeyboardInterrupt:
         logger.info("\n[PRODUCTION] Shutting down…")
     finally:
@@ -251,7 +266,7 @@ def run_ui(args, detector, council, defender, preprocessor):
 
     # Background: run the actual Kafka consumer pipeline
     def run_pipeline():
-        asyncio.run(pipeline.run_production(sm.registry))
+        asyncio.run(pipeline.run_production(sm.registry, auto_monitor=args.auto_monitor))
         
     threading.Thread(target=run_pipeline, daemon=True).start()
 

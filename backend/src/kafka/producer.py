@@ -190,3 +190,46 @@ class FlowProducer:
     def _delivery_callback(err, msg):
         if err:
             logger.warning(f"[Producer] Delivery failed: {err}")
+
+
+class TopicProducer:
+    """
+    Minimal producer for the IDS's own output topics ('threats', 'decisions').
+
+    publish(key, json_str) is fire-and-forget; if Kafka (or confluent_kafka) is
+    unavailable it logs once and becomes a no-op so the pipeline never stalls.
+    """
+
+    def __init__(self, topic: str, bootstrap_servers: Optional[str] = None):
+        self.topic = topic
+        self.bootstrap_servers = bootstrap_servers or os.getenv(
+            "KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"
+        )
+        self._producer = None
+        self._count = 0
+        try:
+            from confluent_kafka import Producer
+            self._producer = Producer({
+                "bootstrap.servers": self.bootstrap_servers,
+                "client.id": f"agentic-ids-{topic}",
+                "linger.ms": 5,
+            })
+        except ImportError:
+            logger.warning(f"[TopicProducer:{topic}] confluent_kafka missing — no-op")
+
+    def publish(self, key: str, value: str) -> bool:
+        if not self._producer:
+            return False
+        try:
+            self._producer.produce(self.topic, key=key.encode("utf-8"), value=value.encode("utf-8"))
+            self._count += 1
+            self._producer.poll(0)
+            return True
+        except Exception as e:
+            logger.warning(f"[TopicProducer:{self.topic}] publish failed: {e}")
+            return False
+
+    def flush(self, timeout: float = 5.0):
+        if self._producer:
+            self._producer.flush(timeout)
+        logger.info(f"[TopicProducer:{self.topic}] published {self._count} messages")

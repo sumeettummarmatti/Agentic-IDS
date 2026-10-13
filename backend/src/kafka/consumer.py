@@ -59,8 +59,10 @@ class FlowConsumer:
         self._running = False
         self._consumed_count = 0
 
-        # Set of server_ids whose partition is currently ACTIVE (not paused)
+        # Set of server_ids whose flows are currently analysed (others are dropped)
         self._monitored: set = set()
+        # When True every server is analysed, including ones that register later
+        self._monitor_all: bool = False
         self._lock = threading.Lock()
 
         # server_id → assigned TopicPartition (populated after assignment)
@@ -78,9 +80,20 @@ class FlowConsumer:
         logger.info(f"[Consumer] ▶ Monitoring STARTED for {server_id}")
         return True
 
+    def monitor_all_servers(self) -> None:
+        """Analyse every server, including ones that register later."""
+        with self._lock:
+            self._monitor_all = True
+        logger.info("[Consumer] ▶ Monitoring STARTED for ALL servers")
+
     def unmonitor(self, server_id: str) -> bool:
         """Pause the Kafka partition for server_id. Returns True if successful."""
         with self._lock:
+            if self._monitor_all:
+                # Leaving "all" mode: keep every currently known server except this one
+                self._monitor_all = False
+                if self.registry:
+                    self._monitored = {s.server_id for s in self.registry.get_all()}
             self._monitored.discard(server_id)
         self._apply_partition_state()
         logger.info(f"[Consumer] ⏸ Monitoring PAUSED for {server_id}")
@@ -88,6 +101,8 @@ class FlowConsumer:
 
     def monitored_servers(self) -> list:
         with self._lock:
+            if self._monitor_all and self.registry:
+                return sorted({s.server_id for s in self.registry.get_all()} | self._monitored)
             return list(self._monitored)
 
     def _apply_partition_state(self):
@@ -204,11 +219,16 @@ class FlowConsumer:
                         logger.error(f"[Consumer] Kafka error: {msg.error()}")
                         continue
 
-                    raw = RawFlowMessage.from_json(msg.value().decode("utf-8"))
+                    try:
+                        raw = RawFlowMessage.from_json(msg.value().decode("utf-8"))
+                    except Exception as e:
+                        # One bad message must not stall the loop (or trigger the 1 s back-off)
+                        logger.warning(f"[Consumer] Skipping unparseable message: {e}")
+                        continue
 
                     # Only forward if the source server is currently monitored
                     with self._lock:
-                        active = raw.server_id in self._monitored
+                        active = self._monitor_all or raw.server_id in self._monitored
                     if active:
                         self.callback(raw)
                         self._consumed_count += 1

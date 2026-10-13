@@ -19,6 +19,7 @@ from typing import Optional, Dict, Any, Tuple, List
 import numpy as np
 
 from src.agents.kernel_executor import KernelExecutor
+from src.ingestion.aegisflow_bridge import is_aegisflow_record, bridge_feature_dict
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,7 @@ class FlowIngestionStage:
         self.preprocessor = preprocessor
         self.detection_queue = detection_queue
         self._processed = 0
+        self._warned_missing = False
 
     async def run(self, source_queue: asyncio.Queue):
         """Consume from source_queue until STOP_SENTINEL."""
@@ -162,13 +164,30 @@ class FlowIngestionStage:
 
                 # Build one DataFrame for the whole batch — far cheaper than N DataFrames
                 # Strip leading/trailing spaces from feature names to match preprocessor
-                rows = [
-                    {k.strip(): v for k, v in msg.features.items()}
-                    for msg in batch
-                ]
+                rows = []
+                for msg in batch:
+                    feats = {k.strip(): v for k, v in msg.features.items()}
+                    if is_aegisflow_record(feats):
+                        # Live capture from the C engine: rename snake_case keys to the
+                        # training column names (CSV replays already use them).
+                        feats = bridge_feature_dict(feats)
+                    rows.append(feats)
                 df = pd.DataFrame(rows)
                 df = df.apply(pd.to_numeric, errors="coerce")
                 df = df.fillna(0.0)
+
+                # Align to exactly the columns the preprocessor was fitted on: extras are
+                # dropped, anything missing is zero-filled, order is fixed.
+                expected = getattr(self.preprocessor.imputer, "feature_names_in_", None)
+                if expected is not None:
+                    missing = [c for c in expected if c not in df.columns]
+                    if missing and not self._warned_missing:
+                        logger.warning(
+                            f"[Ingestion] {len(missing)} fitted column(s) absent from incoming "
+                            f"flows, zero-filling: {missing[:8]}{' …' if len(missing) > 8 else ''}"
+                        )
+                        self._warned_missing = True
+                    df = df.reindex(columns=list(expected), fill_value=0.0)
 
                 # Run preprocessor on the batch
                 if self.preprocessor.feature_names:
@@ -223,12 +242,34 @@ class EnsembleDetectionStage:
     CONFIDENCE_THRESHOLD = 0.6
     CLASS_NAMES = {0: "BENIGN", 1: "DDoS", 2: "PortScan"}
 
-    def __init__(self, detector, threat_queue: asyncio.Queue, benign_queue: asyncio.Queue):
+    def __init__(self, detector, threat_queue: asyncio.Queue, benign_queue: asyncio.Queue,
+                 threats_producer=None):
         self.detector = detector
         self.threat_queue = threat_queue
         self.benign_queue = benign_queue
+        self.threats_producer = threats_producer   # TopicProducer for the 'threats' topic
         self._threats_detected = 0
         self._benign_count = 0
+
+    def _publish_threat(self, item: Dict, attack_type: str, confidence: float):
+        """Publish a ThreatAlertMessage to the 'threats' topic (no-op without a producer)."""
+        if not self.threats_producer:
+            return
+        try:
+            from src.kafka.schemas import ThreatAlertMessage
+            msg = item["msg"]
+            alert = ThreatAlertMessage(
+                server_id=msg.server_id,
+                geo_region=msg.geo_region,
+                flow_id=msg.flow_id,
+                attack_type=attack_type,
+                confidence=float(confidence),
+                severity="High" if confidence > 0.8 else "Medium",
+                raw_features=msg.features,
+            )
+            self.threats_producer.publish(msg.server_id, alert.to_json())
+        except Exception as e:
+            logger.warning(f"[Detection] Could not publish threat alert: {e}")
 
     async def run(self, detection_queue: asyncio.Queue):
         import torch
@@ -325,6 +366,7 @@ class EnsembleDetectionStage:
 
                     if attack_type != "BENIGN" and confidence > self.CONFIDENCE_THRESHOLD:
                         self._threats_detected += 1
+                        self._publish_threat(item, attack_type, confidence)
                         try:
                             self.threat_queue.put_nowait(detection_result)
                         except asyncio.QueueFull:
@@ -651,7 +693,10 @@ class DefenderStage:
                     )
 
             # ── Kafka decisions topic ─────────────────────────────────────────
-            if self.kafka_producer:
+            # Audit log of mitigation decisions: threat flows only (benign "ALLOW" flows
+            # would flood the topic). A flow can appear twice — the immediate RL decision
+            # and the re-evaluation after the council finishes.
+            if self.kafka_producer and attack_type != "BENIGN":
                 from src.kafka.schemas import DefenseDecisionMessage
                 decision = DefenseDecisionMessage(
                     server_id=msg.server_id,
@@ -664,9 +709,7 @@ class DefenderStage:
                     status=action_result.get("status", "executed"),
                     latency_ms=end_to_end_ms,
                 )
-                self.kafka_producer.publish_flow(
-                    vars(decision), flow_id=msg.flow_id
-                )
+                self.kafka_producer.publish(msg.server_id, decision.to_json())
 
             if self.stats_collector:
                 self.stats_collector.record(end_to_end_ms)

@@ -160,7 +160,7 @@ class IDSPipeline:
         logger.info(f"           P99 latency:     {report.get('p99_ms', 0):.1f}ms")
         return report
 
-    async def run_production(self, registry):
+    async def run_production(self, registry, auto_monitor: str = ""):
         """
         Production mode: read from Kafka consumer → pipeline stages.
         Runs indefinitely until KeyboardInterrupt.
@@ -205,11 +205,26 @@ class IDSPipeline:
         self.kafka_consumer = FlowConsumer(callback=on_kafka_message, registry=registry)
         self.kafka_consumer.start()
 
+        # Which servers to analyse immediately ('all' or "MUM-01,LON-01"); empty = wait for UI clicks
+        auto_monitor = (auto_monitor or "").strip()
+        if auto_monitor.lower() == "all":
+            self.kafka_consumer.monitor_all_servers()
+        else:
+            for sid in [s.strip() for s in auto_monitor.split(",") if s.strip()]:
+                self.kafka_consumer.monitor(sid)
+
+        # Output topics so Kafka UI / downstream consumers see alerts and decisions
+        from src.kafka.producer import TopicProducer
+        threats_producer = TopicProducer(os.getenv("KAFKA_THREATS_TOPIC", "threats"))
+        decisions_producer = TopicProducer(os.getenv("KAFKA_DECISIONS_TOPIC", "decisions"))
+
         # Build stages
         ingestion = FlowIngestionStage(self.preprocessor, self.detection_queue)
-        detection = EnsembleDetectionStage(self.detector, self.threat_queue, self.benign_queue)
+        detection = EnsembleDetectionStage(self.detector, self.threat_queue, self.benign_queue,
+                                           threats_producer=threats_producer)
         council_stage = ThreatCouncilStage(self.council, self.defender_queue)
-        defender_stage = DefenderStage(self.defender, stats_collector=self.stats)
+        defender_stage = DefenderStage(self.defender, stats_collector=self.stats,
+                                       kafka_producer=decisions_producer)
         # expose for live_stats
         self._detection_stage = detection
         self._defender_stage = defender_stage
@@ -225,6 +240,8 @@ class IDSPipeline:
             logger.info("[Pipeline] Production pipeline stopped.")
         finally:
             self.kafka_consumer.stop()
+            threats_producer.flush()
+            decisions_producer.flush()
 
     def live_stats(self) -> dict:
         """Return current pipeline stats for the Server Manager UI."""

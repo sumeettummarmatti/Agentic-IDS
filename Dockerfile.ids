@@ -23,11 +23,17 @@ COPY backend/src/   src/
 COPY backend/main.py .
 COPY backend/config/ config/
 
+# Dashboard HTML. server_manager.py resolves it as <three dirs above src/ui>/frontend,
+# which is /frontend when the code lives in /app/src/ui — so it must be copied here.
+COPY frontend/ /frontend/
+
 # Data & models are mounted from host via docker-compose volumes
 # (data/ and models/ are too large to bake into the image)
 
 # Expose Server Manager dashboard port
 EXPOSE 5001
 
-# Default: production mode (reads live Kafka flows)
-CMD ["python", "main.py", "--mode", "production"]
+# Default: UI mode = Kafka consumer pipeline + Server Manager dashboard on :5001.
+# Servers start un-monitored: click "Monitor" on the map, or start the stack with
+# AUTO_MONITOR=all (or a list like MUM-01,LON-01) to analyse flows immediately.
+CMD ["python", "main.py", "--mode", "ui"]

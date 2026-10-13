@@ -1,0 +1,18 @@
+# Secrets: Dockerfile.ids copies backend/config/, which must not bake a real .env into the image.
+# (compose mounts ./backend/config at runtime, so the container still sees it.)
+**/.env
+
+# Mounted as volumes by docker-compose, not baked into images
+backend/data
+backend/models
+backend/reports
+
+# Build output, VCS and local clutter
+.git
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+AegisFlow/build
+*.docx
+*.pdf
+*.patch

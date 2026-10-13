@@ -23,6 +23,7 @@ import logging
 import math
 import os
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -44,6 +45,10 @@ DATA_PATH   = os.getenv("DATA_PATH",   "/app/data/raw/filtered_nowebatt.csv")
 BROKERS     = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 TOPIC       = os.getenv("KAFKA_RAW_FLOWS_TOPIC",   "raw-flows")
 LOOP        = os.getenv("LOOP", "false").lower() == "true"
+REGISTRY_TOPIC = os.getenv("KAFKA_SERVER_REGISTRY_TOPIC", "server-registry")
+LAT         = float(os.getenv("LAT", "0"))
+LON         = float(os.getenv("LON", "0"))
+HEARTBEAT_SECONDS = 30
 # ────────────────────────────────────────────────────────────────────────────
 
 
@@ -71,7 +76,9 @@ def load_slice(data_path: str, slice_idx: int, total: int):
         for label, grp in df.groupby(label_col):
             chunk = len(grp) // total
             slices.append(grp.iloc[slice_idx * chunk : (slice_idx + 1) * chunk])
-        return pd.concat(slices).reset_index(drop=True)
+        # Shuffle: concat leaves the slice grouped by label (all BENIGN first), so without
+        # this the first ~1/3 of the replay contains no attacks at all.
+        return pd.concat(slices).sample(frac=1, random_state=42 + slice_idx).reset_index(drop=True)
     else:
         chunk = len(df) // max(total, 1)
         return df.iloc[slice_idx * chunk : (slice_idx + 1) * chunk].reset_index(drop=True)
@@ -89,6 +96,27 @@ def make_producer():
         "request.required.acks": 1,
     }
     return Producer(conf)
+
+
+def publish_registration(producer, event: str):
+    """Announce this server on the server-registry topic (register / heartbeat / deregister)."""
+    from src.kafka.schemas import ServerRegistration
+    reg = ServerRegistration(
+        server_id=SERVER_ID, geo_region=GEO_REGION, geo_label=GEO_LABEL,
+        lat=LAT, lon=LON, ip="docker", interface="docker0", event=event,
+    )
+    try:
+        producer.produce(REGISTRY_TOPIC, key=SERVER_ID.encode("utf-8"),
+                         value=reg.to_json().encode("utf-8"))
+        producer.poll(0)
+    except Exception as exc:
+        logger.warning(f"[{SERVER_ID}] registry {event} failed: {exc}")
+
+
+def heartbeat_loop(producer):
+    while True:
+        time.sleep(HEARTBEAT_SECONDS)
+        publish_registration(producer, "heartbeat")
 
 
 def replay(producer, df, fps: float) -> int:
@@ -186,6 +214,10 @@ def main():
     logger.info(f"Loaded {len(df)} flows for {SERVER_ID}")
 
     producer = make_producer()
+    publish_registration(producer, "register")
+    producer.flush(timeout=10)
+    logger.info(f"[{SERVER_ID}] Registered on '{REGISTRY_TOPIC}'")
+    threading.Thread(target=heartbeat_loop, args=(producer,), daemon=True).start()
     run = 0
 
     while True:

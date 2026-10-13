@@ -85,32 +85,34 @@ services:
       kafka:
         condition: service_healthy
     entrypoint: ["/bin/sh", "-c"]
-    command: |
-      "
-      echo '=== Creating Kafka topics ==='
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
-        --create --if-not-exists \
-        --topic raw-flows --partitions 6 --replication-factor 1 \
-        --config retention.ms=3600000
+    # One list element = one argv entry, so compose does not shell-split the script
+    # (the old quoted string form broke the line continuations and only raw-flows got created).
+    command:
+      - |
+        set -e
+        echo '=== Creating Kafka topics ==='
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
+          --create --if-not-exists \
+          --topic raw-flows --partitions 6 --replication-factor 1 \
+          --config retention.ms=3600000
 
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
-        --create --if-not-exists \
-        --topic threats --partitions 6 --replication-factor 1 \
-        --config retention.ms=86400000
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
+          --create --if-not-exists \
+          --topic threats --partitions 6 --replication-factor 1 \
+          --config retention.ms=86400000
 
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
-        --create --if-not-exists \
-        --topic decisions --partitions 6 --replication-factor 1 \
-        --config retention.ms=86400000
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
+          --create --if-not-exists \
+          --topic decisions --partitions 6 --replication-factor 1 \
+          --config retention.ms=86400000
 
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
-        --create --if-not-exists \
-        --topic server-registry --partitions 1 --replication-factor 1 \
-        --config retention.ms=604800000 --config cleanup.policy=compact
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
+          --create --if-not-exists \
+          --topic server-registry --partitions 1 --replication-factor 1 \
+          --config retention.ms=604800000 --config cleanup.policy=compact
 
-      echo '=== Topics ready ==='
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list
-      "
+        echo '=== Topics ready ==='
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list
     restart: "no"
     networks:
       - ids-net
@@ -159,15 +161,18 @@ services:
         condition: service_completed_successfully
     environment:
       SERVER_ID: MUM-01
+      LAT: "19.076"                   # map position (matches registry preset)
+      LON: "72.877"
       GEO_REGION: asia-south1
       GEO_LABEL: "Mumbai, India"
       SLICE_INDEX: "0"
       TOTAL_SLICES: "3"
-      FLOWS_PER_SECOND: "100"      # 100 flows/s — adjust for load test
+      FLOWS_PER_SECOND: "${FLOWS_PER_SECOND:-10}"   # demo-friendly; raise for load tests
       LOOP: "true"                  # keep replaying until container stops
       DATA_PATH: /app/data/raw/filtered_nowebatt.csv
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_RAW_FLOWS_TOPIC: raw-flows
+      KAFKA_SERVER_REGISTRY_TOPIC: server-registry
     volumes:
       - ./backend/data:/app/data:ro   # read-only dataset mount
     restart: on-failure
@@ -185,15 +190,18 @@ services:
         condition: service_completed_successfully
     environment:
       SERVER_ID: USE-01
+      LAT: "38.0"                   # map position (matches registry preset)
+      LON: "-78.0"
       GEO_REGION: us-east1
       GEO_LABEL: "Virginia, USA"
       SLICE_INDEX: "1"
       TOTAL_SLICES: "3"
-      FLOWS_PER_SECOND: "150"
+      FLOWS_PER_SECOND: "${FLOWS_PER_SECOND:-10}"   # demo-friendly; raise for load tests
       LOOP: "true"
       DATA_PATH: /app/data/raw/filtered_nowebatt.csv
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_RAW_FLOWS_TOPIC: raw-flows
+      KAFKA_SERVER_REGISTRY_TOPIC: server-registry
     volumes:
       - ./backend/data:/app/data:ro
     restart: on-failure
@@ -211,15 +219,18 @@ services:
         condition: service_completed_successfully
     environment:
       SERVER_ID: LON-01
+      LAT: "51.507"                   # map position (matches registry preset)
+      LON: "-0.127"
       GEO_REGION: europe-west2
       GEO_LABEL: "London, UK"
       SLICE_INDEX: "2"
       TOTAL_SLICES: "3"
-      FLOWS_PER_SECOND: "80"
+      FLOWS_PER_SECOND: "${FLOWS_PER_SECOND:-10}"   # demo-friendly; raise for load tests
       LOOP: "true"
       DATA_PATH: /app/data/raw/filtered_nowebatt.csv
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_RAW_FLOWS_TOPIC: raw-flows
+      KAFKA_SERVER_REGISTRY_TOPIC: server-registry
     volumes:
       - ./backend/data:/app/data:ro
     restart: on-failure
@@ -251,6 +262,8 @@ services:
       KAFKA_DECISIONS_TOPIC: decisions
       KAFKA_SERVER_REGISTRY_TOPIC: server-registry
       KAFKA_CONSUMER_GROUP: agentic-ids-group
+      # Analyse flows from these servers immediately (all | MUM-01,LON-01 | empty = click Monitor in UI)
+      AUTO_MONITOR: ${AUTO_MONITOR:-all}
       # LLM
       PRIMARY_LLM_PROVIDER: groq
       LLM_PROVIDER: groq
@@ -261,6 +274,7 @@ services:
       - ./backend/data:/app/data:ro
       - ./backend/models:/app/models       # persist trained models
       - ./backend/config:/app/config:ro    # .env, config files
+      - ./backend/reports:/app/reports     # action logs (reports/actions/*.jsonl) visible on the host
     restart: unless-stopped
     networks:
       - ids-net

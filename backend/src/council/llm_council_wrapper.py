@@ -60,7 +60,6 @@ class LLMClient:
             api_key = os.getenv('GROQ_API_KEY')
             if api_key:
                 self.groq_client = Groq(api_key=api_key)
-                self.groq_client = Groq(api_key=api_key)
                 logger.info("✓ Groq client initialized")
             else:
                 logger.warning("GROQ_API_KEY not found in environment")
@@ -564,59 +563,6 @@ class ThreatAnalysisCouncil:
             logger.error(f"Intel call failed: {e}")
             return {'role': 'threat_intel', 'analysis': ''}
     
-    def _reach_consensus(self, analyst, engineer, intel) -> tuple:
-        """Aggregate council perspectives into consensus"""
-        logger.info("\n[Council Consensus]")
-        
-        # Simple consensus based on threat type matches
-        threat_types = [
-            analyst.get('threat_type', 'Unknown'),
-            'DDoS' if 'DDoS' in engineer.get('analysis', '') else 'Unknown',
-            'DDoS' if 'DDoS' in intel.get('analysis', '') else 'Unknown'
-        ]
-        
-        # Count votes
-        from collections import Counter
-        votes = Counter(threat_types)
-        final_threat = votes.most_common(1)[0][0]
-        
-        # Consensus score: % of council in agreement
-        consensus_score = votes[final_threat] / 3.0
-        
-        recommendation = {
-            'threat_type': final_threat,
-            'severity': 'High' if consensus_score > 0.66 else 'Medium' if consensus_score > 0.33 else 'Low',
-            'actions': [
-                'Log flow for detailed forensic analysis',
-                f'Block source if {final_threat} pattern persists',
-                'Update IDS signatures based on findings',
-                'Monitor related network flows'
-            ]
-        }
-        
-        logger.info(f"Consensus Score: {consensus_score:.1%}")
-        logger.info(f"Final Threat Type: {recommendation['threat_type']}")
-        logger.info(f"Severity: {recommendation['severity']}")
-        
-        return consensus_score, recommendation
-    
-    def _generate_explanation(self, analyst, engineer, intel) -> str:
-        """Generate human-readable explanation"""
-        return f"""
-THREAT ANALYSIS COUNCIL REPORT
-{'=' * 60}
-
-SECURITY ANALYST ASSESSMENT ({self.analyst_config['provider'].upper()}):
-{analyst.get('analysis', 'No analysis available')[:500]}
-
-ML ENGINEER PERSPECTIVE ({self.engineer_config['provider'].upper()}):
-{engineer.get('analysis', 'No analysis available')[:500]}
-
-THREAT INTELLIGENCE ({self.intel_config['provider'].upper()}):
-{intel.get('analysis', 'No analysis available')[:500]}
-{'=' * 60}
-"""
-    
     # ─────────────────────────────────────────────────────────────
     #  Parsers — each reads the JSON the LLM was asked to return
     # ─────────────────────────────────────────────────────────────
@@ -877,7 +823,7 @@ SECURITY ANALYST ({self.analyst_config['provider'].upper()}:{self.analyst_config
   Reasoning      : {analyst.get('reasoning', 'none extracted')}
 
 ML ENGINEER ({self.engineer_config['provider'].upper()}:{self.engineer_config['model']})
-  Model Valid    : {analyst.get('model_decision_valid', True)}
+  Model Valid    : {engineer.get('model_decision_valid', True)}
   FP Risk        : {engineer.get('false_positive_risk', '?')}
   Recommended    : {engineer.get('recommended_action', '?')}
   Anomalous Feat : {'; '.join(engineer.get('anomalous_features', [])) or 'none extracted'}

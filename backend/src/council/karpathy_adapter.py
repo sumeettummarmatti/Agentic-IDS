@@ -136,9 +136,9 @@ try:
     
     # Configure Persona Models
     council_config.COUNCIL_MODELS = [
-        "Security-Expert-GPT4"
+        "Security-Expert-GPT4",
         "Network-Engineer-Claude",
-        "Threat-Hunter-Gemini" 
+        "Threat-Hunter-Gemini",
     ]
     council_config.CHAIRMAN_MODEL = "Chairman-GPT4"
     

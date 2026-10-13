@@ -70,7 +70,32 @@ class RawFlowMessage:
     @classmethod
     def from_json(cls, data: str) -> "RawFlowMessage":
         d = json.loads(data)
-        return cls(**d)
+
+        if "features" in d:
+            # Envelope written by the Python producers (server_simulator / FlowProducer)
+            return cls(**d)
+
+        # Flat record written by the C engine (aegisflow_kafka): the flow features sit at
+        # the top level next to server_id / geo_region / captured_at_us. Wrap it into the
+        # same shape so the rest of the pipeline sees one message type.
+        envelope_keys = {"server_id", "geo_region", "captured_at_us"}
+        features = {k: v for k, v in d.items() if k not in envelope_keys}
+        flow_id = "{}-{}-{}-{}-{}".format(
+            d.get("src_ip", "?"), d.get("dst_ip", "?"),
+            d.get("src_port", 0), d.get("dst_port", 0), d.get("protocol", 0),
+        )
+        kwargs = {
+            "server_id": d.get("server_id", "UNKNOWN"),
+            "geo_region": d.get("geo_region", "unknown"),
+            "flow_id": flow_id,
+            "features": features,
+        }
+        captured_us = d.get("captured_at_us")
+        if captured_us:
+            kwargs["timestamp"] = datetime.fromtimestamp(
+                float(captured_us) / 1e6, tz=timezone.utc
+            ).isoformat()
+        return cls(**kwargs)
 
 
 # ─────────────────────────────────────────────────────────────

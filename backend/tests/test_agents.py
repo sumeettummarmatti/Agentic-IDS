@@ -17,7 +17,7 @@ class TestAttackerAgents(unittest.TestCase):
         flow = agent.generate_flow(omega=1.5)
         
         self.assertIsInstance(flow, dict)
-        self.assertGreater(flow['SYN Flag Count'], 0)
+        self.assertGreater(flow['Fwd SYN Flags'], 0)
         self.assertEqual(flow['Protocol'], 6)
     
     def test_portscan_sequence(self):

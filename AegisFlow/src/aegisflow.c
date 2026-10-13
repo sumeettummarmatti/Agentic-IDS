@@ -98,6 +98,11 @@ AegisContext *aegisflow_create(const AegisConfig *cfg,
         LOG_INFO("CSV exporter enabled");
     }
 
+    if (cfg->extra_exporter) {
+        exporter_chain_add(&ctx->exporter_chain, cfg->extra_exporter, cfg->extra_exporter_ctx);
+        LOG_INFO("Custom exporter enabled");
+    }
+
     /* ── Create flow table ── */
     FlowTableConfig tbl_cfg = {
         .tcp_timeout_sec    = cfg->tcp_timeout_sec,

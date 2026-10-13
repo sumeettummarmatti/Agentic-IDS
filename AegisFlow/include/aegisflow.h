@@ -65,6 +65,8 @@ typedef struct {
     FILE       *output_json;     /**< Write JSON exports here (NULL = disabled) */
     FILE       *output_csv;      /**< Write CSV exports here (NULL = disabled) */
     int         csv_header;      /**< Write CSV header line (default 1) */
+    ExportFn    extra_exporter;  /**< Optional extra sink, e.g. kafka_exporter_write (NULL = none) */
+    void       *extra_exporter_ctx; /**< Context passed to extra_exporter */
 
     /* ── Runtime settings ── */
     uint64_t    max_packets;     /**< Stop after N packets (0 = unlimited) */

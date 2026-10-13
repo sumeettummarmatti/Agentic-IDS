@@ -35,6 +35,12 @@ set(CMAKE_C_STANDARD          17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS        OFF)   # no GNU extensions — pure C17
 
+# macOS: _POSIX_C_SOURCE hides the BSD types (u_char, u_int) that the SDK's
+# <net/ethernet.h> / <netinet/ip.h> need; _DARWIN_C_SOURCE restores them.
+if(APPLE)
+    add_compile_definitions(_DARWIN_C_SOURCE)
+endif()
+
 # Coloured compiler diagnostics
 if(CMAKE_GENERATOR STREQUAL "Ninja")
     add_compile_options(-fdiagnostics-color=always)

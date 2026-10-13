@@ -30,6 +30,7 @@
 #include "kafka_exporter.h"
 
 #include <getopt.h>
+#include <unistd.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -170,46 +171,13 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* ── Wire up the Kafka exporter via ExporterChain ── */
-    /*
-     * We don't use cfg.output_json / cfg.output_csv here — instead we
-     * register kafka_exporter_write as the on_flow_close callback via the
-     * ExporterChain mechanism.
-     *
-     * AegisFlow calls the registered chain dispatcher when each flow closes.
-     * We hook into this by temporarily redirecting cfg.output_json to a pipe
-     * that feeds our Kafka exporter — OR we can patch AegisFlow to accept a
-     * custom ExportFn.
-     *
-     * Current approach: pipe stdout JSON → Kafka exporter thread.
-     * Clean approach (requires one-line patch to aegisflow.c): pass
-     * exporter_chain_dispatch as on_flow_close with our chain as ctx.
-     *
-     * For now we use the pipe approach which works without modifying
-     * AegisFlow internals.
-     */
-
-    /* Actually — the cleanest zero-patch approach:
-     * Run aegisflow with JSON to stdout, pipe to a reader thread that
-     * produces to Kafka line-by-line. */
-    cfg.output_json = NULL;   /* we handle export ourselves via direct API */
+    /* ── Wire up the Kafka exporter ──
+     * Every closed flow is passed to kafka_exporter_write() through the
+     * engine's exporter chain. No file/stdout output is used in this binary. */
+    cfg.output_json = NULL;
     cfg.output_csv  = NULL;
-
-    /* ── NOTE: To hook in without patching, run:                         ── */
-    /*   ./aegisflow_kafka -r file.pcap -j - | kafka_pipe_producer          */
-    /* For the cleanest integration, add one line to aegisflow.c:           */
-    /*   ctx->on_flow_close = my_chain_dispatch;                            */
-    /* See docs/kafka_integration.md for the patched build instructions.    */
-
-    /* For the current release, use the pipe approach: */
-    fprintf(stderr,
-        "[kafka_main] Integration mode: JSON stdout → kafka_exporter_write\n"
-        "             Each line from aegisflow stdout is a flow JSON.\n"
-        "             Launching aegisflow with JSON on stdout...\n\n"
-    );
-
-    /* Re-enable JSON to stdout so we can intercept it */
-    cfg.output_json = stdout;
+    cfg.extra_exporter     = kafka_exporter_write;
+    cfg.extra_exporter_ctx = g_kafka_ctx;
 
     /* ── Signal handlers ── */
     signal(SIGINT,  signal_handler);

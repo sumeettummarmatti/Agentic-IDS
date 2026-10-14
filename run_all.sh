@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# One-command launcher for Agentic-IDS (automates MANUAL.md steps 1.4, 2, 4 and opens the dashboard).
+# One-command launcher for Agentic-IDS. Works on macOS, Ubuntu/Linux, and Windows (WSL 2 or Git Bash).
 #
+#   bash run_all.sh       start everything and open the browser
 #   ./run_all.sh          start everything and open the browser
 #   ./run_all.sh stop     stop the Docker stack (and Ollama if this script started it)
 #   ./run_all.sh stop -v  same, and wipe Kafka data
@@ -15,12 +16,31 @@ say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m  %s\n' "$*"; }
 die()  { printf '\033[1;31mxx\033[0m  %s\n' "$*"; exit 1; }
 
+# ── Which operating system? ──
+case "$(uname -s)" in
+  Darwin)               OS=mac ;;
+  Linux)                if grep -qi microsoft /proc/version 2>/dev/null; then OS=wsl; else OS=linux; fi ;;
+  MINGW*|MSYS*|CYGWIN*) OS=gitbash ;;
+  *)                    OS=linux ;;
+esac
+
+# Open a URL in the default browser (never fails the script).
+open_url() {
+  case "$OS" in
+    mac)     open "$1" >/dev/null 2>&1 ;;
+    wsl)     { command -v wslview >/dev/null && wslview "$1"; } >/dev/null 2>&1 || cmd.exe /c start "" "$1" >/dev/null 2>&1 || explorer.exe "$1" >/dev/null 2>&1 ;;
+    gitbash) start "" "$1" >/dev/null 2>&1 || cmd.exe /c start "" "$1" >/dev/null 2>&1 ;;
+    *)       xdg-open "$1" >/dev/null 2>&1 ;;
+  esac
+  return 0
+}
+
 # Read KEY from the env files (first file wins, like the backend does).
 env_val() {
   local key="$1" f v
   for f in "${ENV_FILES[@]}"; do
     [ -f "$f" ] || continue
-    v=$(grep -E "^[[:space:]]*${key}=" "$f" | head -1 | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//' -e 's/[[:space:]]*#.*$//')
+    v=$(grep -E "^[[:space:]]*${key}=" "$f" | head -1 | tr -d '\r' | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//' -e 's/[[:space:]]*#.*$//')
     [ -n "$v" ] && { printf '%s' "$v"; return; }
   done
 }
@@ -50,19 +70,31 @@ if [ "${1:-}" = "stop" ]; then
 fi
 
 # ───────────────────────── 1. Docker ─────────────────────────
-command -v docker >/dev/null || die "docker not found — install Docker Desktop"
+command -v docker >/dev/null || die "docker not found. Install it first (see README, Part A, step 1 for your system)."
+command -v curl >/dev/null || die "curl not found. On Ubuntu/WSL run: sudo apt install -y curl"
 if ! docker info >/dev/null 2>&1; then
-  say "Starting Docker Desktop"
-  open -a Docker
-  wait_for 180 "Docker daemon" docker info || die "Docker did not start"
+  case "$OS" in
+    mac)
+      say "Starting Docker Desktop"
+      open -a Docker ;;
+    linux)
+      say "Docker is not running. Trying: sudo systemctl start docker"
+      sudo systemctl start docker || true ;;
+    wsl|gitbash)
+      warn "Docker is not running. Open Docker Desktop on Windows and wait for 'Engine running'." ;;
+  esac
+  wait_for 180 "Docker daemon" docker info || die "Docker did not start. On Linux, make sure your user is in the 'docker' group (README, Ubuntu step 1)."
 fi
-say "Docker is running"
+docker compose version >/dev/null 2>&1 || die "'docker compose' (v2) not found. Update Docker Desktop, or on Ubuntu install the docker-compose-plugin package."
+say "Docker is running ($OS)"
 
-# ───────────────────────── 2. iCloud offloaded files (step 1.4) ─────────────────────────
-OFFLOADED=$(find . -path ./.git -prune -o -type f -flags +dataless -print 2>/dev/null | wc -l | tr -d ' ')
-if [ "$OFFLOADED" != "0" ]; then
-  say "Downloading $OFFLOADED iCloud-offloaded files (Docker can't read them otherwise)"
-  find . -path ./.git -prune -o -type f -flags +dataless -exec cat {} + >/dev/null 2>&1
+# ───────────────────────── 2. iCloud offloaded files (macOS only) ─────────────────────────
+if [ "$OS" = "mac" ]; then
+  OFFLOADED=$(find . -path ./.git -prune -o -type f -flags +dataless -print 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$OFFLOADED" != "0" ]; then
+    say "Downloading $OFFLOADED iCloud-offloaded files (Docker can't read them otherwise)"
+    find . -path ./.git -prune -o -type f -flags +dataless -exec cat {} + >/dev/null 2>&1
+  fi
 fi
 
 # ───────────────────────── 3. Local LLMs ─────────────────────────
@@ -138,8 +170,8 @@ docker compose ps -a
 
 # ───────────────────────── 7. Open browser ─────────────────────────
 say "Opening dashboard and Kafka UI"
-open http://localhost:5001
-open http://localhost:8080
+open_url http://localhost:5001
+open_url http://localhost:8080
 
 cat <<EOF
 

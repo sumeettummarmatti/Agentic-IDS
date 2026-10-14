@@ -268,6 +268,9 @@ services:
       PRIMARY_LLM_PROVIDER: groq
       LLM_PROVIDER: groq
       GROQ_API_KEY: ${GROQ_API_KEY}        # injected from host .env
+      # Local LLMs run on the Mac, not in the container ("localhost" here is the container itself)
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      LMSTUDIO_BASE_URL: ${LMSTUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
       # Paths (volume-mounted)
       DATA_PATH: /app/data/raw/filtered_nowebatt.csv
     volumes:

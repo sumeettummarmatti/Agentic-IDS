@@ -230,6 +230,11 @@ class FlowConsumer:
                     with self._lock:
                         active = self._monitor_all or raw.server_id in self._monitored
                     if active:
+                        # Attack Lab open: only injected demo flows are analysed
+                        from src.ui import lab_mode
+                        if lab_mode.is_active() and not str(raw.flow_id).startswith("DEMO-"):
+                            lab_mode.count_skipped()
+                            continue
                         self.callback(raw)
                         self._consumed_count += 1
 

@@ -13,6 +13,23 @@ from huggingface_hub import InferenceClient
 
 logger = logging.getLogger(__name__)
 
+import threading as _threading
+import re
+import time
+import uuid
+
+# Per-thread context so generate() knows which Attack Lab flow a call belongs to.
+llm_ctx = _threading.local()
+
+
+def _emit_llm(event: dict):
+    try:
+        from src.ui import server_manager as sm
+        sm.emit_pipeline_event(event)
+    except Exception:
+        pass
+
+
 
 @dataclass
 class ThreatAnalysis:
@@ -48,11 +65,18 @@ class LLMClient:
         self.lmstudio_base_url = os.getenv('LMSTUDIO_BASE_URL', 'http://localhost:1234/v1')
         
         # Initialize providers
+        from src.council import groq_key
+        groq_key.register(self._set_groq_key)
         self._init_groq()
         self._init_ollama()
         self._init_lmstudio()
         self._init_huggingface()
     
+    def _set_groq_key(self, api_key: str):
+        """Hot-swap the Groq client when the key is updated at runtime."""
+        from groq import Groq
+        self.groq_client = Groq(api_key=api_key)
+
     def _init_groq(self):
         """Initialize Groq client"""
         try:
@@ -101,7 +125,31 @@ class LLMClient:
         except Exception as e:
             logger.warning(f"LM Studio not available at {self.lmstudio_base_url}: {e}")
     
-    def generate(self, prompt: str, provider: str, model: str, max_tokens: int = 300, temperature: float = 0.3) -> str:
+    def generate(self, prompt: str, provider: str, model: str, max_tokens: int = 300,
+                 temperature: float = 0.3, role: str = "") -> str:
+        """Universal generate; for Attack Lab flows also streams live LLM events to the UI."""
+        flow_id = getattr(llm_ctx, "flow_id", None)
+        if not (flow_id and str(flow_id).startswith("DEMO-")):
+            if flow_id:
+                # Attack Lab open: background council calls wait, leaving the Groq allowance to the demo
+                from src.ui import lab_mode
+                waited = 0
+                while lab_mode.is_active() and waited < 600:
+                    time.sleep(1); waited += 1
+            return self._generate_core(prompt, provider, model, max_tokens, temperature)
+        call_id = uuid.uuid4().hex[:8]
+        base = {"stage": "llm", "flow_id": flow_id, "call_id": call_id, "role": role,
+                "provider": provider, "model": model}
+        _emit_llm({**base, "event": "start", "prompt_preview": prompt[:900]})
+        llm_ctx.call_id = call_id
+        t0 = time.perf_counter()
+        result = self._generate_core(prompt, provider, model, max_tokens, temperature)
+        llm_ctx.call_id = None
+        _emit_llm({**base, "event": "end", "duration_s": round(time.perf_counter() - t0, 1),
+                   "response": str(result)[:3000], "error": str(result).startswith("Error:")})
+        return result
+
+    def _generate_core(self, prompt: str, provider: str, model: str, max_tokens: int = 300, temperature: float = 0.3) -> str:
         """
         Universal generate method.
         provider: 'groq' | 'ollama' | 'lmstudio' | 'hf'
@@ -128,12 +176,17 @@ class LLMClient:
         # If the local call timed out or returned an error, retry on Groq so
         # the council always has all 3 agent votes available.
         if result.startswith("Error:") and self.groq_client:
+            fallback_model = os.getenv("GROQ_FALLBACK_MODEL", "llama-3.1-8b-instant")
+            if getattr(llm_ctx, "call_id", None):
+                _emit_llm({"stage": "llm", "event": "fallback", "flow_id": llm_ctx.flow_id,
+                           "call_id": llm_ctx.call_id, "from": f"{provider}:{model}",
+                           "to": f"groq:{fallback_model}", "reason": str(result)[:160]})
             logger.warning(
                 f"[Council] {provider}:{model} failed — falling back to "
-                f"groq:llama-3.1-8b-instant"
+                f"groq:{fallback_model}"
             )
             result = self._generate_groq(
-                prompt, "llama-3.1-8b-instant", max_tokens, temperature
+                prompt, fallback_model, max_tokens, temperature
             )
         return result
     
@@ -143,13 +196,50 @@ class LLMClient:
             return "Error: Groq client not initialized"
         
         try:
-            response = self.groq_client.chat.completions.create(
-                model=model,
-                messages=[{'role': 'user', 'content': prompt}],
-                max_tokens=max_tokens,
-                temperature=temperature
-            )
-            return response.choices[0].message.content
+            extra = {}
+            if "gpt-oss" in model:
+                # Reasoning model: hidden thinking tokens count against max_tokens, so a
+                # small budget returns empty content. Keep effort low and leave headroom.
+                extra["reasoning_effort"] = "low"
+                max_tokens = max(max_tokens, 1500)
+            from src.council import groq_key
+            auth_wait = float(os.getenv("GROQ_KEY_WAIT_SECONDS", "120"))
+            response = None
+            for attempt in range(5):
+                gen = groq_key.generation()
+                try:
+                    response = self.groq_client.chat.completions.create(
+                        model=model,
+                        messages=[{'role': 'user', 'content': prompt}],
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        **extra,
+                    )
+                    groq_key.mark_ok()
+                    break
+                except Exception as e:
+                    msg = str(e)
+                    last = attempt == 4
+                    if "429" in msg and not last:
+                        # Rate limited: pause this call (the rest of the pipeline keeps going),
+                        # then retry when the limit resets or a new key is pasted in the UI.
+                        m = re.search(r"try again in (?:(\d+)m)?(\d+(?:\.\d+)?)(ms|s)", msg)
+                        wait = 20.0
+                        if m:
+                            wait = float(m.group(2)) / (1000 if m.group(3) == "ms" else 1) + (60 * int(m.group(1)) if m.group(1) else 0)
+                        d = re.search(r"on (tokens|requests) per (minute|day|second|hour) \((\w+)\): Limit (\d+), Used (\d+)", msg)
+                        detail = (f"{model} used {int(d.group(5)):,} of {int(d.group(4)):,} {d.group(1)} per {d.group(2)}; resets in about {int(wait)}s."
+                                  if d else f"{model} is rate limited; retrying in about {int(wait)}s.")
+                        if wait > 3:
+                            groq_key.mark_problem("rate_limited", detail)
+                        groq_key.wait_for_new_key(gen, timeout=min(wait + 0.5, 65.0))
+                        continue
+                    if ("401" in msg or "403" in msg or "invalid_api_key" in msg) and not last:
+                        groq_key.mark_problem("invalid", "Groq rejected the API key. Paste a valid key to continue.")
+                        if groq_key.wait_for_new_key(gen, timeout=auth_wait):
+                            continue
+                    raise
+            return response.choices[0].message.content or "Error: empty response from Groq"
         except Exception as e:
             logger.error(f"Groq generation failed: {e}")
             return f"Error: {str(e)}"
@@ -163,6 +253,9 @@ class LLMClient:
                     'model': model,
                     'messages': [{'role': 'user', 'content': prompt}],
                     'stream': False,
+                    # qwen3 & co. otherwise spend the whole num_predict budget on hidden
+                    # "thinking" and return empty content (Ollama >= 0.9)
+                    'think': False,
                     'options': {
                         'temperature': temperature,
                         'num_predict': max_tokens,
@@ -171,7 +264,10 @@ class LLMClient:
                 timeout=90,
             )
             if response.status_code == 200:
-                return response.json()['message']['content']
+                content = response.json()['message']['content']
+                if not content.strip():
+                    return "Error: Ollama returned an empty response"
+                return content
             else:
                 logger.error(f"Ollama error {response.status_code}: {response.text}")
                 return f"Error: Ollama returned {response.status_code}"
@@ -387,9 +483,23 @@ class ThreatAnalysisCouncil:
         logger.info("=" * 60)
 
         # ── 3 LLM calls ───────────────────────────────────────────────
-        analyst_raw  = self._security_analyst_perspective(flow_data, detector_prediction)
-        engineer_raw = self._ml_engineer_perspective(flow_data, detector_prediction)
-        intel_raw    = self._threat_intel_perspective(flow_data, detector_prediction)
+        # The three experts are independent, so run them at the same time. Each worker thread
+        # inherits the flow id so the Attack Lab can show all three live.
+        from concurrent.futures import ThreadPoolExecutor
+        _fid = getattr(llm_ctx, "flow_id", None)
+
+        def _run(fn):
+            llm_ctx.flow_id = _fid
+            try:
+                return fn(flow_data, detector_prediction)
+            finally:
+                llm_ctx.flow_id = None
+
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="council-agent") as _ex:
+            _fa = _ex.submit(_run, self._security_analyst_perspective)
+            _fe = _ex.submit(_run, self._ml_engineer_perspective)
+            _fi = _ex.submit(_run, self._threat_intel_perspective)
+            analyst_raw, engineer_raw, intel_raw = _fa.result(), _fe.result(), _fi.result()
 
         # ── Parse structured JSON from each response ────────────────────
         analyst  = self._parse_analyst(analyst_raw.get('analysis', ''))
@@ -485,6 +595,7 @@ class ThreatAnalysisCouncil:
                 prompt=prompt,
                 provider=self.analyst_config['provider'],
                 model=self.analyst_config['model'],
+                role='analyst',
                 max_tokens=350,   # JSON response only needs ~150-250 tokens
                 temperature=0.2,
             )
@@ -518,6 +629,7 @@ class ThreatAnalysisCouncil:
                 prompt=prompt,
                 provider=self.engineer_config['provider'],
                 model=self.engineer_config['model'],
+                role='engineer',
                 max_tokens=350,   # JSON response only needs ~150-250 tokens
                 temperature=0.2,
             )
@@ -554,6 +666,7 @@ class ThreatAnalysisCouncil:
                 prompt=prompt,
                 provider=self.intel_config['provider'],
                 model=self.intel_config['model'],
+                role='intel',
                 max_tokens=350,   # JSON response only needs ~150-250 tokens
                 temperature=0.2,
             )

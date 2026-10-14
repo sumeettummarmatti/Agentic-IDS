@@ -136,6 +136,9 @@
     <button id="tab-pipeline" onclick="switchTab('pipeline')" class="tab-inactive px-5 pb-3 text-xs font-semibold uppercase tracking-widest transition-all">
       Pipeline
     </button>
+    <a href="/simulation" class="px-5 pb-3 text-xs font-semibold uppercase tracking-widest transition-all text-red-400 hover:text-red-300" title="Interactive attack simulation">
+      🎮 Attack Lab
+    </a>
   </nav>
 
   <div class="flex items-center gap-3 text-xs text-slate-500 font-mono">
@@ -577,7 +580,7 @@
         </div>
         <div class="text-xs font-bold text-white mb-2">Security Analyst</div>
         <div class="space-y-1 text-[10px] font-mono">
-          <div class="flex justify-between"><span class="text-slate-600">Backend</span><span class="text-red-300">LM Studio (local)</span></div>
+          <div class="flex justify-between"><span class="text-slate-600">Backend</span><span class="text-red-300">Groq · qwen3.8-27b</span></div>
           <div class="flex justify-between"><span class="text-slate-600">Output</span><span class="text-slate-300">attack_type, severity</span></div>
           <div class="flex justify-between"><span class="text-slate-600">Vote weight</span><span class="text-blue-400">50%</span></div>
         </div>
@@ -592,7 +595,7 @@
         </div>
         <div class="text-xs font-bold text-white mb-2">ML Engineer</div>
         <div class="space-y-1 text-[10px] font-mono">
-          <div class="flex justify-between"><span class="text-slate-600">Backend</span><span class="text-blue-300">Ollama (local)</span></div>
+          <div class="flex justify-between"><span class="text-slate-600">Backend</span><span class="text-blue-300">Groq · gpt-oss-20b</span></div>
           <div class="flex justify-between"><span class="text-slate-600">Output</span><span class="text-slate-300">model_valid, fp_risk</span></div>
           <div class="flex justify-between"><span class="text-slate-600">Vote weight</span><span class="text-blue-400">20%</span></div>
           <div class="flex justify-between"><span class="text-slate-600">FP gate</span><span class="text-yellow-400">overrides to MONITOR</span></div>
@@ -608,7 +611,7 @@
         </div>
         <div class="text-xs font-bold text-white mb-2">Threat Intel</div>
         <div class="space-y-1 text-[10px] font-mono">
-          <div class="flex justify-between"><span class="text-slate-600">Backend</span><span class="text-purple-300">Groq (cloud)</span></div>
+          <div class="flex justify-between"><span class="text-slate-600">Backend</span><span class="text-purple-300">Groq · allam-2-7b</span></div>
           <div class="flex justify-between"><span class="text-slate-600">Output</span><span class="text-slate-300">signature, attribution</span></div>
           <div class="flex justify-between"><span class="text-slate-600">Vote weight</span><span class="text-blue-400">30%</span></div>
           <div class="flex justify-between"><span class="text-slate-600">Override</span><span class="text-purple-400">&gt;80% conf → type override</span></div>
@@ -1143,8 +1146,10 @@ function filterReports() {
     if (severity && r.council_severity !== severity) return false;
     return true;
   });
-  document.getElementById('report-count-label').textContent = `${filteredReports.length.toLocaleString()} records`;
-  renderReportTable(filteredReports);
+  const MAX_ROWS = 100;  // drawing 500 rows takes ~1s and froze the page under live load
+  document.getElementById('report-count-label').textContent =
+    `${filteredReports.length.toLocaleString()} records` + (filteredReports.length > MAX_ROWS ? ` · showing latest ${MAX_ROWS}` : '');
+  renderReportTable(filteredReports.slice(0, MAX_ROWS));
 }
 
 function renderReportTable(records) {
@@ -1486,6 +1491,15 @@ function closeExpandedGraph() {
 }
 
 // ═══════════════════ LIVE REPORT STREAM ═══════════════════
+// The report stream can deliver 30+ records/s; redrawing the whole table on every one
+// froze the page. Coalesce redraws and throttle the activity log.
+let _filterQueued = false, _lastLiveLog = 0;
+function scheduleFilterReports() {
+  if (_filterQueued) return;
+  _filterQueued = true;
+  setTimeout(() => { _filterQueued = false; filterReports(); }, 2000);
+}
+
 function startReportStream() {
   if (reportSSE) return;
   reportSSE = new EventSource('/api/reports/stream');
@@ -1503,14 +1517,17 @@ function startReportStream() {
           if (rec.council_fp_risk) existing.false_positive_risk = rec.council_fp_risk;
           
           Object.assign(existing, rec);
-          filterReports(); // re-render table to show new severity/council
+          scheduleFilterReports(); // re-render table to show new severity/council
         }
       } else {
         // Prepend new base record to top of allReports
         allReports.unshift(rec);
         if (allReports.length > 500) allReports.pop();
-        filterReports();
-        addLog('threat', `[LIVE] ${rec.server_id} · ${rec.attack_type} → ${rec.rl_action}`);
+        scheduleFilterReports();
+        if (Date.now() - _lastLiveLog > 1000) {
+          _lastLiveLog = Date.now();
+          addLog('threat', `[LIVE] ${rec.server_id} · ${rec.attack_type} → ${rec.rl_action}`);
+        }
       }
     } catch(err) {}
   };
@@ -1521,6 +1538,7 @@ function startReportStream() {
 }
 
 // ═══════════════════ LIVE PIPELINE STREAM ═══════════════════
+let _feedQueued = false;
 function startPipelineStream() {
   if (pipelineSSE) return;
   pipelineSSE = new EventSource('/api/pipeline/stream');
@@ -1529,7 +1547,7 @@ function startPipelineStream() {
       const ev = JSON.parse(e.data);
       pipelineEvents.unshift(ev);
       if (pipelineEvents.length > MAX_PIPELINE_EVENTS) pipelineEvents.pop();
-      renderPipelineFeed();
+      if (!_feedQueued) { _feedQueued = true; setTimeout(() => { _feedQueued = false; renderPipelineFeed(); }, 1500); }
     } catch(err) {}
   };
   pipelineSSE.onerror = () => {
@@ -1687,5 +1705,6 @@ boot();
   </div>
   <div style="margin-top:16px;font-size:9px;color:#374151;font-family:JetBrains Mono,monospace">Click any node for details · Click outside to close</div>
 </div>
+<script src="/static/groq-key.js" defer></script>
 </body>
 </html>

@@ -356,7 +356,22 @@ class EnsembleDetectionStage:
 
                 # Route results
                 t_detected = time.perf_counter()
-                for item, attack_type, confidence in zip(batch, attack_types, confidences):
+                for bi, (item, attack_type, confidence) in enumerate(zip(batch, attack_types, confidences)):
+                    _dmsg = item.get("msg")
+                    if _dmsg is not None and str(getattr(_dmsg, "flow_id", "")).startswith("DEMO-"):
+                        _emit({
+                            "stage": "detection",
+                            "event": "classified",
+                            "flow_id": _dmsg.flow_id,
+                            "server_id": _dmsg.server_id,
+                            "attack_type": attack_type,
+                            "confidence": round(float(confidence) * 100, 1),
+                            "xgb_pct": round(float(np.max(xgb_probs[bi])) * 100, 1),
+                            "lstm_pct": round(float(np.max(lstm_probs[bi])) * 100, 1),
+                            "xgb_class": int(np.argmax(xgb_probs[bi])),
+                            "lstm_class": int(np.argmax(lstm_probs[bi])),
+                            "is_threat": bool(attack_type != "BENIGN" and confidence > self.CONFIDENCE_THRESHOLD),
+                        })
                     detection_result = {
                         **item,
                         "attack_type": attack_type,
@@ -418,6 +433,13 @@ class ThreatCouncilStage:
         self._analyzed = 0
         # Rate-limit LLM calls so they don't monopolise the thread-pool executor.
         self._semaphore = asyncio.Semaphore(5)  # serialize LLM calls — free-tier Groq has tight TPM limits
+        # Attack Lab flows ("DEMO-<run>-<n>") get their own lane so a demo isn't stuck
+        # behind the background-traffic backlog, and only the first few per run hit the LLMs.
+        self._demo_semaphore = asyncio.Semaphore(3)
+        from concurrent.futures import ThreadPoolExecutor
+        self._demo_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="demo-council")
+        self._demo_council_counts: Dict[str, int] = {}
+        self._DEMO_COUNCIL_PER_RUN = 3
 
         self._pending_tasks: set = set()
 
@@ -462,7 +484,17 @@ class ThreatCouncilStage:
         })
 
         # ── Step 2: LLM enrichment in background (rate-limited) ─────
-        async with self._semaphore:
+        sem = self._semaphore
+        pool = None
+        if str(msg.flow_id).startswith("DEMO-"):
+            run_key = str(msg.flow_id).rsplit("-", 1)[0]
+            seen = self._demo_council_counts.get(run_key, 0)
+            if seen >= self._DEMO_COUNCIL_PER_RUN:
+                return  # defender already has this flow; skip extra LLM calls in demos
+            self._demo_council_counts[run_key] = seen + 1
+            sem = self._demo_semaphore
+            pool = self._demo_pool
+        async with sem:
             try:
                 logger.info(
                     f"[Council] Enriching: {msg.flow_id} | "
@@ -480,9 +512,17 @@ class ThreatCouncilStage:
                 prediction = {"attack_type": attack_type, "confidence": confidence}
 
                 loop = asyncio.get_running_loop()
+                def _run_council(fid=msg.flow_id):
+                    from src.council.llm_council_wrapper import llm_ctx
+                    llm_ctx.flow_id = fid
+                    try:
+                        return self.council.analyze_threat(flow_dict, prediction)
+                    finally:
+                        llm_ctx.flow_id = None
+
                 council_result = await loop.run_in_executor(
-                    None,
-                    lambda: self.council.analyze_threat(flow_dict, prediction)
+                    pool,
+                    _run_council
                 )
 
                 self._analyzed += 1
@@ -511,6 +551,15 @@ class ThreatCouncilStage:
                         "analyst_action": council_result.get("agent_votes", {}).get("analyst", "?"),
                         "engineer_action": council_result.get("agent_votes", {}).get("engineer", "?"),
                         "intel_action": council_result.get("agent_votes", {}).get("intel", "?"),
+                        "agents": {
+                            role: {
+                                "action": (council_result.get(role) or {}).get("recommended_action", "?"),
+                                "reasoning": (council_result.get(role) or {}).get("reasoning", ""),
+                            }
+                            for role in ("analyst", "engineer", "intel")
+                        },
+                        "fp_risk": council_result.get("false_positive_risk", ""),
+                        "threat_actor": council_result.get("threat_actor_type", ""),
                     })
 
                     # ── Write council patch to JSONL so Threat Reports table updates ──
@@ -614,6 +663,14 @@ class DefenderStage:
             if attack_type == "BENIGN":
                 action = "ALLOW"
                 action_result = {"action": "ALLOW", "action_id": -1, "status": "allowed"}
+                if str(msg.flow_id).startswith("DEMO-"):
+                    _emit({
+                        "stage": "defender", "event": "action",
+                        "flow_id": msg.flow_id, "server_id": msg.server_id,
+                        "attack_type": "BENIGN", "confidence": round(confidence * 100, 1),
+                        "action": "ALLOW", "is_re_evaluation": False,
+                        "latency_ms": round((time.perf_counter() - t_ingested) * 1000, 1),
+                    })
             else:
                 if is_re_evaluation and council_result:
                     confidence = council_result.get("confidence", confidence)
@@ -640,6 +697,7 @@ class DefenderStage:
                     "attack_type": attack_type,
                     "confidence": round(confidence * 100, 1),
                     "action": action,
+                    "is_re_evaluation": bool(is_re_evaluation),
                     "latency_ms": round((time.perf_counter() - t_ingested) * 1000, 1),
                 })
 
@@ -660,6 +718,12 @@ class DefenderStage:
                 
                 if is_re_evaluation:
                     commands, comments = self._executor._build_commands(action, src_ip_str, msg.flow_id)
+                    if str(msg.flow_id).startswith("DEMO-"):
+                        _emit({
+                            "stage": "defender", "event": "commands",
+                            "flow_id": msg.flow_id, "server_id": msg.server_id,
+                            "action": action, "commands": commands, "comments": comments,
+                        })
                     if not self._executor.dry_run and src_ip_str and src_ip_str != "N/A (not in flow features)":
                         await loop.run_in_executor(None, lambda: self._executor._run_commands(commands))
                     

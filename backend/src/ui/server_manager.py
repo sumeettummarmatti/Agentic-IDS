@@ -727,6 +727,93 @@ The ML Ensemble (XGBoost + LSTM) classified flow `{flow_id}` as a **{attack_type
         )
 
 
+    # ── Attack Lab (simulation page) ──────────────────────────
+
+    @app.get("/simulation", response_class=HTMLResponse)
+    def simulation_page():
+        html_path = os.path.join(_FRONTEND_DIR, "simulation.html")
+        if os.path.exists(html_path):
+            with open(html_path) as f:
+                return f.read()
+        return HTMLResponse("<h1>frontend/simulation.html not found</h1>", status_code=404)
+
+    @app.get("/api/demo/locations")
+    def demo_locations():
+        """Registered servers, topped up with the built-in demo locations."""
+        from src.ui.demo_attack import DEFAULT_LOCATIONS
+        out = {s["server_id"]: s for s in registry.to_api_list()}
+        for d in DEFAULT_LOCATIONS:
+            out.setdefault(d["server_id"], dict(d))
+        return {"servers": list(out.values())}
+
+    class GroqKeyRequest(BaseModel):
+        key: str
+
+    @app.get("/api/settings/groq")
+    def groq_key_status():
+        """Groq key health for the UI: ok / rate_limited / invalid / missing (never returns the key)."""
+        from src.council import groq_key
+        s = groq_key.status()
+        if s["state"] == "ok" and not s["key_hint"]:
+            s["state"], s["message"] = "missing", "No Groq API key is set."
+        return s
+
+    @app.post("/api/settings/groq")
+    def groq_key_update(req: GroqKeyRequest):
+        """Replace the Groq API key at runtime; paused LLM calls pick it up and continue."""
+        from src.council import groq_key
+        ok, message = groq_key.apply(req.key)
+        if not ok:
+            raise HTTPException(status_code=400, detail=message)
+        return {"ok": True, "message": message, **groq_key.status()}
+
+    class LabModeRequest(BaseModel):
+        active: bool
+
+    @app.post("/api/demo/lab")
+    def demo_lab_mode(req: LabModeRequest):
+        """Attack Lab page heartbeat: active=true pauses background analysis, false resumes it."""
+        from src.ui import lab_mode
+        lab_mode.touch() if req.active else lab_mode.release()
+        return lab_mode.status()
+
+    @app.get("/api/demo/lab")
+    def demo_lab_status():
+        from src.ui import lab_mode
+        return lab_mode.status()
+
+    class DemoAttackRequest(BaseModel):
+        scenario: str            # normal | ddos | portscan
+        server_id: str
+        count: int = 30
+
+    @app.post("/api/demo/attack")
+    def demo_attack(req: DemoAttackRequest):
+        """Inject a labelled burst of real dataset flows into Kafka for one server."""
+        from src.ui import demo_attack as da
+        server = next((s for s in registry.to_api_list() if s.get("server_id") == req.server_id), None)
+        if server is None:
+            server = next((d for d in da.DEFAULT_LOCATIONS if d["server_id"] == req.server_id), None)
+            if server is not None:  # make it appear on the dashboard map too
+                registry.register(ServerRegistration(
+                    server_id=server["server_id"], geo_region=server["geo_region"],
+                    geo_label=server["geo_label"], lat=server["lat"], lon=server["lon"],
+                    ip="simulator", interface="simulated"))
+        if server is None:
+            raise HTTPException(status_code=404, detail=f"Unknown server {req.server_id}")
+        if req.scenario not in da.SCENARIOS:
+            raise HTTPException(status_code=400, detail="scenario must be normal, ddos or portscan")
+        # Make sure the pipeline is actually analysing this server
+        if pipeline and pipeline.kafka_consumer:
+            if req.server_id not in pipeline.kafka_consumer.monitored_servers():
+                pipeline.kafka_consumer.monitor(req.server_id)
+        try:
+            return da.launch_attack(req.scenario, server, count=max(1, min(req.count, 100)))
+        except Exception as e:
+            logger.error(f"[Demo] attack launch failed: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+
     # ─────────────────────────────────────────────────────────
     #  Internal helpers
     # ─────────────────────────────────────────────────────────

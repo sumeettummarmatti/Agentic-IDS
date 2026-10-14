@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attack Lab — Agentic-IDS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* same palette as the dashboard (cyber-*) */
+    --paper:#0a0c0f; --panel:#0f1218; --surface:#141820; --sunk:#1b222d; --raise:#252d3a; --line:#1e2530;
+    --ink:#e2e8f0; --ink2:#94a3b8; --ink3:#64748b;
+    --red:#e2001a; --red2:#ff3344; --red-dim:#a5001a;
+    --attack:#ff3344; --safe:#10b981; --warn:#f59e0b;
+    /* stage / expert identity colours */
+    --s-capture:#94a3b8; --s-kafka:#fb923c; --s-ml:#3b82f6; --s-council:#a855f7; --s-defender:#eab308;
+    --a-analyst:#2dd4bf; --a-engineer:#60a5fa; --a-intel:#fbbf24;
+    --sans:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif; --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; color-scheme:dark; }
+  body { margin:0; color:var(--ink); font:14px/1.6 var(--sans); font-variant-numeric:tabular-nums;
+         background:radial-gradient(900px 380px at 12% -8%, rgba(226,0,26,.10), transparent 70%), var(--paper); min-height:100vh; }
+  ::-webkit-scrollbar { width:6px; height:6px; } ::-webkit-scrollbar-track { background:var(--paper); }
+  ::-webkit-scrollbar-thumb { background:var(--line); border-radius:3px; } ::-webkit-scrollbar-thumb:hover { background:#2d3748; }
+  a { color:var(--red2); } button { font:inherit; }
+  :focus-visible { outline:2px solid var(--red2); outline-offset:2px; border-radius:6px; }
+  h1,h2,h3,h4 { margin:0; line-height:1.2; letter-spacing:-.01em; color:#fff; }
+
+  /* section label: small caps with a red bar, as on the dashboard */
+  .lbl { display:flex; align-items:center; gap:9px; font:600 10.5px var(--sans); letter-spacing:.16em; text-transform:uppercase; color:var(--ink3); }
+  .lbl::before { content:""; width:3px; height:12px; border-radius:2px; background:var(--red); }
+
+  /* ───────── header (matches dashboard) ───────── */
+  header { position:sticky; top:0; z-index:20; display:flex; align-items:center; justify-content:space-between; gap:16px; height:56px; padding:0 24px;
+           background:rgba(15,18,24,.95); backdrop-filter:blur(14px); border-bottom:1px solid var(--line); }
+  .logo { display:flex; align-items:center; gap:12px; }
+  .logo .sq { width:32px; height:32px; border-radius:6px; display:grid; place-items:center; color:#fff; font:700 11px var(--mono);
+              background:linear-gradient(135deg,var(--red),var(--red-dim)); box-shadow:0 0 20px rgba(226,0,26,.28); }
+  .logo b { font-weight:700; font-size:14px; color:#fff; } .logo b span { color:var(--red); }
+  .pill-live { margin-left:8px; font:500 10px var(--mono); letter-spacing:.14em; text-transform:uppercase; color:var(--red); border:1px solid rgba(226,0,26,.4); border-radius:999px; padding:2px 9px; }
+  nav { display:flex; align-self:stretch; gap:4px; }
+  nav a, nav span { display:flex; align-items:center; padding:0 18px; font:600 11px var(--sans); letter-spacing:.14em; text-transform:uppercase; text-decoration:none;
+                    color:var(--ink3); border-bottom:2px solid transparent; }
+  nav a:hover { color:var(--ink2); } nav span.on { color:#fff; border-bottom-color:var(--red); }
+  .live { display:inline-flex; align-items:center; gap:8px; font:500 12px var(--mono); color:var(--ink2); }
+  .live i { width:8px; height:8px; border-radius:50%; background:var(--ink3); }
+  .live.on i { background:var(--safe); box-shadow:0 0 10px rgba(16,185,129,.55); }
+  #pausebar { display:none; background:#1a1400; border-bottom:1px solid rgba(245,158,11,.35); color:#fbbf24; padding:8px 24px; font-size:13px; }
+
+  /* ───────── layout ───────── */
+  .shell { display:grid; grid-template-columns:320px minmax(0,1fr); gap:22px; max-width:1400px; margin:0 auto; padding:22px 24px 90px; }
+  @media (max-width:1000px){ .shell{ grid-template-columns:1fr; } .rail{ position:static !important; } }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:12px; }
+  .rail { position:sticky; top:78px; align-self:start; padding:18px; }
+  .rail .lead { color:var(--ink2); font-size:13px; margin:12px 0 4px; }
+  .rail .lbl { margin-top:20px; } .rail .lbl:first-child { margin-top:0; }
+  .rail .group { margin-top:10px; }
+  .opt { display:flex; gap:11px; align-items:flex-start; width:100%; text-align:left; background:var(--panel); color:inherit;
+         border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:7px; cursor:pointer; transition:border-color .15s, background .15s, box-shadow .15s; }
+  .opt:hover { border-color:rgba(226,0,26,.35); }
+  .opt[aria-checked="true"] { border-color:var(--red); background:rgba(226,0,26,.07); box-shadow:0 0 18px rgba(226,0,26,.12); }
+  .opt .glyph { font-size:18px; line-height:1.3; }
+  .opt b { display:block; font-size:13.5px; color:#fff; font-weight:600; }
+  .opt span { display:block; color:var(--ink3); font-size:12px; line-height:1.45; margin-top:2px; }
+  .opt.where { align-items:center; padding:8px 12px; } .opt.where b { font-size:13px; }
+  .launch { width:100%; margin-top:16px; border:0; border-radius:10px; padding:13px 16px; color:#fff; cursor:pointer; font:700 14px var(--sans); letter-spacing:.04em;
+            background:linear-gradient(135deg,var(--red),var(--red-dim)); box-shadow:0 0 22px rgba(226,0,26,.25); transition:filter .15s; }
+  .launch:hover:not(:disabled) { filter:brightness(1.12); }
+  .launch:disabled { background:var(--raise); box-shadow:none; color:var(--ink3); cursor:not-allowed; }
+  .rail .reset { width:100%; margin-top:8px; background:none; border:1px solid var(--line); border-radius:10px; padding:9px; color:var(--ink2); cursor:pointer; display:none; font-size:13px; }
+  .rail .reset:hover { border-color:var(--ink3); color:#fff; }
+  .rail .note { margin:12px 0 0; font-size:12px; color:var(--ink3); }
+
+  /* ───────── headline ───────── */
+  .headline { margin:2px 0 20px; }
+  .headline h1 { font-size:clamp(26px,3vw,36px); font-weight:800; max-width:26ch; }
+  .headline p { color:var(--ink2); font-size:14.5px; margin:8px 0 0; max-width:64ch; }
+  .headline.bad h1 { color:var(--attack); text-shadow:0 0 28px rgba(255,51,68,.25); } .headline.good h1 { color:var(--safe); }
+  .tally { display:flex; flex-wrap:wrap; gap:8px 12px; margin-top:16px; }
+  .tally div { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:8px 14px; font-size:11px; color:var(--ink3); letter-spacing:.06em; text-transform:uppercase; min-width:96px; }
+  .tally b { display:block; font:700 22px var(--mono); color:#fff; letter-spacing:0; text-transform:none; }
+
+  /* ───────── stage track ───────── */
+  .track { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; }
+  @media (max-width:1100px){ .track{ grid-template-columns:1fr 1fr; } }
+  .stage { --c:var(--ink3); position:relative; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 14px 14px; overflow:hidden; transition:border-color .3s, box-shadow .3s; }
+  .stage::before { content:""; position:absolute; left:0; right:0; top:0; height:3px; background:var(--line); transition:background .4s; }
+  .stage.on::before { background:var(--c); }
+  .stage.on { border-color:color-mix(in srgb, var(--c) 35%, var(--line)); }
+  .stage.active { box-shadow:0 0 22px color-mix(in srgb, var(--c) 22%, transparent); background:color-mix(in srgb, var(--c) 5%, var(--surface)); }
+  .stage .step { display:flex; align-items:center; gap:9px; margin-bottom:8px; }
+  .stage .dot { width:22px; height:22px; border-radius:6px; background:var(--sunk); color:var(--ink3); display:grid; place-items:center; font:700 11px var(--mono); transition:.3s; flex:none; }
+  .stage.on .dot { background:var(--c); color:#0a0c0f; }
+  .stage h3 { font-size:13.5px; font-weight:700; }
+  .stage .what { font-size:12px; color:var(--ink3); line-height:1.5; min-height:72px; }
+  .stage .now { margin-top:10px; padding-top:10px; border-top:1px dashed var(--line); font:12px/1.55 var(--mono); min-height:64px; color:#cbd5e1; }
+  .stage:not(.on) .now { color:var(--ink3); }
+  .spin { display:inline-block; width:10px; height:10px; border:2px solid var(--c,var(--ink3)); border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; vertical-align:-1px; margin-right:7px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion:reduce){ .spin{ animation:none; border-top-color:var(--c); } html{scroll-behavior:auto} }
+
+  /* ───────── sections ───────── */
+  section.block { margin-top:30px; }
+  section.block > h2 { display:flex; align-items:center; gap:10px; font-size:16px; font-weight:700; }
+  section.block > h2::before { content:""; width:3px; height:16px; border-radius:2px; background:var(--red); }
+  section.block > .sub { color:var(--ink3); margin:6px 0 14px; max-width:72ch; font-size:13px; }
+
+  .compare { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+  @media (max-width:900px){ .compare{ grid-template-columns:1fr; } }
+  .cmp { --c:var(--ink3); background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 16px; border-top:3px solid var(--c); }
+  .cmp .who { color:var(--ink3); font:600 10.5px var(--sans); letter-spacing:.14em; text-transform:uppercase; }
+  .cmp .says { font:700 20px var(--sans); margin:8px 0 6px; color:#fff; min-height:30px; }
+  .cmp .why { color:var(--ink2); font-size:12.5px; line-height:1.55; }
+  .explain { margin-top:12px; background:#1a0000; border:1px solid var(--line); border-left:3px solid var(--red); border-radius:0 10px 10px 0; padding:12px 16px; font-size:13.5px; color:#cbd5e1; display:none; }
+  .explain b { color:#fff; } .explain.show { display:block; }
+
+  .act { display:inline-block; font:700 10.5px var(--mono); letter-spacing:.04em; text-transform:uppercase; padding:3px 9px; border-radius:6px; border:1px solid currentColor; white-space:nowrap; background:var(--panel); }
+  .act.ALLOW { color:var(--safe); background:#0f1e1a; border-color:#10b98155; }
+  .act.MONITOR { color:var(--ink2); background:var(--surface); border-color:#47556977; }
+  .act.DEEP_PACKET_INSPECTION { color:#60a5fa; background:#0a0f1e; border-color:#3b82f655; }
+  .act.RATE_LIMIT { color:var(--warn); background:#1a1400; border-color:#f59e0b55; }
+  .act.BLOCK_SOURCE { color:#f87171; background:#2a0a00; border-color:#ef4444aa; }
+  .act.unknown { color:var(--ink3); }
+  .stage .act, .cmp .act { white-space:normal; line-height:1.35; max-width:100%; }
+  .meaning { color:var(--ink2); font-size:12.5px; margin-top:14px; }
+  pre.cmd { background:var(--paper); color:#34d399; border:1px solid var(--line); border-radius:8px; padding:11px 13px; margin:8px 0 0; font:12px/1.55 var(--mono); overflow-x:auto; white-space:pre-wrap; }
+
+  /* ───────── expert sessions ───────── */
+  .session { background:var(--surface); border:1px solid var(--line); border-radius:12px; margin-bottom:14px; overflow:hidden; }
+  .session > .top { display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; padding:11px 16px; background:var(--panel); border-bottom:1px solid var(--line); border-left:3px solid var(--red); }
+  .session .top h3 { font-size:13.5px; font-weight:700; }
+  .session .top .meta { color:var(--ink3); font:500 11.5px var(--mono); }
+  .session .vote-line { margin-left:auto; display:flex; align-items:center; gap:9px; font-size:12px; color:var(--ink3); }
+  .experts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }
+  @media (max-width:1000px){ .experts{ grid-template-columns:1fr; } .expert{ border-right:0 !important; border-bottom:1px solid var(--line); } }
+  .expert { --c:var(--ink3); padding:16px 16px 18px; border-right:1px solid var(--line); min-width:0; }
+  .expert:last-child { border-right:0; }
+  .expert .who { display:flex; align-items:center; gap:10px; }
+  .expert .avatar { width:28px; height:28px; border-radius:7px; background:color-mix(in srgb, var(--c) 16%, var(--panel)); color:var(--c); border:1px solid color-mix(in srgb, var(--c) 45%, transparent); display:grid; place-items:center; font:700 12px var(--mono); flex:none; }
+  .expert h4 { font-size:13.5px; font-weight:700; }
+  .expert .job { color:var(--ink3); font-size:11.5px; line-height:1.45; margin:7px 0 0; }
+  .expert .engine { display:flex; flex-wrap:wrap; gap:3px 10px; margin:10px 0 12px; padding:6px 0; border-top:1px dashed var(--line); border-bottom:1px dashed var(--line); font:11px var(--mono); color:var(--ink3); }
+  .expert .engine .st { margin-left:auto; color:var(--ink2); }
+  .expert .fb { font-size:11.5px; color:#fbbf24; background:#1a1400; border:1px solid rgba(245,158,11,.3); border-radius:6px; padding:5px 9px; margin-bottom:10px; display:none; }
+  .answer .verdict { display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-bottom:10px; font-size:12.5px; color:var(--ink2); }
+  .answer .reason { font-size:13.5px; line-height:1.7; margin:0 0 12px; color:#e2e8f0; }
+  .answer dl { margin:0; display:grid; grid-template-columns:auto 1fr; gap:7px 12px; font-size:12.5px; }
+  .answer dt { color:var(--ink3); } .answer dd { margin:0; color:#cbd5e1; min-width:0; overflow-wrap:anywhere; }
+  .answer ul { margin:2px 0 0; padding-left:16px; } .answer li { margin-bottom:6px; line-height:1.5; }
+  .answer li b { font-weight:600; color:#fff; } .answer li span { color:var(--ink2); }
+  .tag { display:inline-block; background:var(--sunk); border:1px solid var(--line); border-radius:5px; padding:1px 8px; margin:0 5px 5px 0; font-size:11.5px; color:#cbd5e1; }
+  .expert details { margin-top:12px; font-size:12px; } .expert summary { cursor:pointer; color:var(--ink3); } .expert summary:hover { color:var(--ink2); }
+  .expert pre { background:var(--paper); border:1px solid var(--line); border-radius:7px; padding:9px 11px; margin:7px 0 0; font:11px/1.55 var(--mono); color:#34d399; white-space:pre-wrap; max-height:200px; overflow:auto; }
+  .empty { padding:26px; text-align:center; color:var(--ink3); background:var(--surface); border:1px dashed var(--line); border-radius:12px; font-size:13px; }
+
+  details.logwrap { margin-top:30px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:2px 16px; }
+  details.logwrap summary { cursor:pointer; padding:11px 0; font:600 10.5px var(--sans); letter-spacing:.16em; text-transform:uppercase; color:var(--ink3); }
+  #log { padding-bottom:10px; max-height:280px; overflow:auto; font-size:12.5px; }
+  #log div { padding:6px 0; border-top:1px solid var(--line); color:#cbd5e1; }
+  #log time { color:var(--ink3); margin-right:10px; font:11px var(--mono); }
+
+  /* entry warning */
+  #gate { position:fixed; inset:0; background:rgba(5,6,8,.82); backdrop-filter:blur(8px); display:flex; align-items:center; justify-content:center; z-index:50; padding:20px; }
+  #gate .box { max-width:520px; background:var(--surface); border:1px solid var(--line); border-top:3px solid var(--red); border-radius:14px; padding:26px 28px; box-shadow:0 0 60px rgba(226,0,26,.15); }
+  #gate h2 { font-size:19px; margin-bottom:10px; }
+  #gate p { margin:0 0 6px; color:var(--ink2); } #gate ul { padding-left:18px; margin:12px 0 22px; color:var(--ink2); } #gate li { margin-bottom:9px; } #gate li b { color:#fff; }
+  #gate .btns { display:flex; gap:10px; justify-content:flex-end; }
+  #gate .btns button { padding:10px 18px; border-radius:9px; font:600 13px var(--sans); cursor:pointer; }
+  #gate .stay { background:none; border:1px solid var(--line); color:var(--ink2); } #gate .stay:hover { color:#fff; border-color:var(--ink3); }
+  #gate .go { border:0; color:#fff; background:linear-gradient(135deg,var(--red),var(--red-dim)); box-shadow:0 0 18px rgba(226,0,26,.3); }
+</style>
+</head>
+<body>
+
+<div id="gate" role="dialog" aria-modal="true" aria-labelledby="gt"><div class="box">
+  <h2 id="gt">Before you enter the Attack Lab</h2>
+  <p>The Attack Lab is a safe sandbox for demos. While it is open:</p>
+  <ul>
+    <li><b>Live threat analysis is paused.</b> Traffic from the real and simulated servers is skipped, so you only see the attack you launch.</li>
+    <li>Skipped traffic is not analysed later. The dashboard history will have a gap.</li>
+    <li>Analysis resumes automatically when you go back to the dashboard or close this page.</li>
+  </ul>
+  <div class="btns">
+    <button class="stay" onclick="location.href='/'">Back to dashboard</button>
+    <button class="go" onclick="enterLab()">Enter Attack Lab</button>
+  </div>
+</div></div>
+
+<div id="pausebar">Live threat analysis is paused while you are in the Attack Lab. It resumes when you return to the dashboard.</div>
+
+<header>
+  <div class="logo"><div class="sq">IDS</div><div><b>Agentic<span>-IDS</span></b><span class="pill-live">Lab</span></div></div>
+  <nav aria-label="Pages"><a href="/" onclick="leaveLab()">Dashboard</a><span class="on" aria-current="page">Attack Lab</span></nav>
+  <span class="live" id="conn"><i></i><span>Connecting</span></span>
+</header>
+
+<div class="shell">
+  <!-- ───────── set-up rail ───────── -->
+  <aside class="rail card" aria-label="Set up an attack">
+    <div class="lbl">Set up an attack</div>
+    <p class="lead">Pick a place and a kind of traffic. We send 30 real network flows through the same system that protects the live servers.</p>
+
+    <div class="lbl" id="lbl-where">Target server</div>
+    <div class="group" id="locations" role="radiogroup" aria-labelledby="lbl-where"><div class="note">Loading servers…</div></div>
+
+    <div class="lbl" id="lbl-what">Traffic to send</div>
+    <div class="group" id="scenarios" role="radiogroup" aria-labelledby="lbl-what">
+      <button class="opt" role="radio" aria-checked="true" data-s="normal"><span class="glyph">🌐</span><div><b>Normal browsing</b><span>Web pages and video calls. The system should stay quiet and let it through.</span></div></button>
+      <button class="opt" role="radio" aria-checked="false" data-s="ddos"><span class="glyph">🌊</span><div><b>DDoS flood</b><span>Thousands of fake visitors crowd a shop door so real customers can't get in.</span></div></button>
+      <button class="opt" role="radio" aria-checked="false" data-s="portscan"><span class="glyph">🚪</span><div><b>Port scan</b><span>Someone tries every door and window of a building to find an unlocked one.</span></div></button>
+    </div>
+
+    <button class="launch" id="launch" disabled>Launch attack</button>
+    <button class="reset" id="reset">Clear and start over</button>
+    <p class="note" id="launchHint">Pick a server to begin.</p>
+  </aside>
+
+  <!-- ───────── results ───────── -->
+  <main>
+    <div class="headline" id="headline">
+      <h1>Watch an attack move through the system</h1>
+      <p>Choose a server and a type of traffic on the left, then launch. You will see each stage react, and read what three AI experts think about it.</p>
+      <div class="tally" id="counters"></div>
+    </div>
+
+    <div class="track" id="track">
+      <div class="stage" id="st-capture" style="--c:var(--s-capture)">
+        <div class="step"><span class="dot">1</span><h3>Traffic source</h3></div>
+        <div class="what">A server notes every conversation it has with the outside world: who talked, for how long, how much data.</div>
+        <div class="now" id="lv-capture">Waiting to launch</div></div>
+      <div class="stage" id="st-kafka" style="--c:var(--s-kafka)">
+        <div class="step"><span class="dot">2</span><h3>Kafka queue</h3></div>
+        <div class="what">A conveyor belt. Flows from every server are placed on one belt so the analysers never get swamped.</div>
+        <div class="now" id="lv-kafka">Waiting to launch</div></div>
+      <div class="stage" id="st-ml" style="--c:var(--s-ml)">
+        <div class="step"><span class="dot">3</span><h3>ML detection</h3></div>
+        <div class="what">Two trained models study the numbers and guess: normal, DDoS or port scan. Fast, but only numbers.</div>
+        <div class="now" id="lv-ml">Waiting to launch</div></div>
+      <div class="stage" id="st-council" style="--c:var(--s-council)">
+        <div class="step"><span class="dot">4</span><h3>AI expert council</h3></div>
+        <div class="what">Three language-model experts read the flow, explain their thinking and vote. Slower, but they can reason.</div>
+        <div class="now" id="lv-council">Waiting to launch</div></div>
+      <div class="stage" id="st-defender" style="--c:var(--s-defender)">
+        <div class="step"><span class="dot">5</span><h3>RL defender</h3></div>
+        <div class="what">A reinforcement-learning agent picks the response. Commands are shown but never run (dry run).</div>
+        <div class="now" id="lv-defender">Waiting to launch</div></div>
+    </div>
+
+    <section class="block" id="compareBlock" style="display:none">
+      <h2>Who said what</h2>
+      <p class="sub">The same traffic judged three ways. They don't always agree, and that is useful to see.</p>
+      <div class="compare">
+        <div class="cmp" style="--c:var(--s-ml)"><div class="who">ML models</div><div class="says" id="cmp-ml">—</div><div class="why" id="cmp-ml-why"></div></div>
+        <div class="cmp" style="--c:var(--s-council)"><div class="who">AI experts (majority)</div><div class="says" id="cmp-council">Waiting…</div><div class="why" id="cmp-council-why"></div></div>
+        <div class="cmp" style="--c:var(--s-defender)"><div class="who">Defender's action</div><div class="says" id="cmp-def">Waiting…</div><div class="why" id="cmp-def-why"></div></div>
+      </div>
+      <div class="explain" id="explain"></div>
+      <div id="cmdBox"></div>
+    </section>
+
+    <section class="block">
+      <h2>The AI experts at work</h2>
+      <p class="sub">Only flows the ML models find suspicious are sent to the experts, and in this demo we review the first three of each attack. Each expert is a separate AI model call. You can read exactly what each one concluded.</p>
+      <div id="sessions"><div class="empty">Nothing yet. The experts wake up once the ML models raise an alarm.</div></div>
+    </section>
+
+    <details class="logwrap"><summary>Step-by-step log</summary><div id="log"></div></details>
+  </main>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+const ACTION_MEANING = {
+  ALLOW: "Looks safe, so let it through.",
+  MONITOR: "Suspicious or unclear. Keep watching and take no action yet.",
+  DEEP_PACKET_INSPECTION: "Open the packets and look inside before deciding.",
+  RATE_LIMIT: "Slow this source down so it cannot flood the server.",
+  BLOCK_SOURCE: "Cut this source off completely."
+};
+const ACTION_LABEL = a => String(a || "unknown").replace(/_/g, " ").toLowerCase().replace(/^./, c => c.toUpperCase());
+const SCENARIO_NAME = { normal: "normal browsing", ddos: "a DDoS flood", portscan: "a port scan" };
+const EXPERTS = {
+  analyst:  { name: "Security Analyst", initial: "A", color: "var(--a-analyst)",  job: "Names the attack type and rates how serious it is." },
+  engineer: { name: "ML Engineer",      initial: "E", color: "var(--a-engineer)", job: "Checks whether the ML models might be wrong, i.e. a false alarm." },
+  intel:    { name: "Threat Intel",     initial: "T", color: "var(--a-intel)",    job: "Compares the flow with known attack signatures." }
+};
+
+let selServer = null, selScenario = "normal";
+let run = null, state = null, es = null;
+const sessions = {};   // flow_id -> {el, votes, n}
+const callToCell = {};
+
+// ───────── set-up ─────────
+async function loadServers() {
+  try {
+    const d = await (await fetch("/api/demo/locations")).json();
+    const arr = d.servers || [];
+    const box = $("locations");
+    if (!arr.length) { box.innerHTML = '<div class="note">No servers available yet. Refresh in a few seconds.</div>'; return; }
+    box.innerHTML = "";
+    arr.forEach(s => {
+      const b = document.createElement("button");
+      b.className = "opt where"; b.setAttribute("role", "radio"); b.setAttribute("aria-checked", "false");
+      b.innerHTML = `<span class="glyph">📍</span><div><b>${esc(s.geo_label || s.server_id)}</b></div>`;
+      b.onclick = () => { selServer = s.server_id; box.querySelectorAll(".opt").forEach(x => x.setAttribute("aria-checked", "false")); b.setAttribute("aria-checked", "true"); refreshLaunch(); };
+      box.appendChild(b);
+    });
+    box.firstChild.click();
+  } catch (e) { $("locations").innerHTML = `<div class="note">Could not load servers: ${esc(e)}</div>`; }
+}
+document.querySelectorAll("#scenarios .opt").forEach(c => c.onclick = () => {
+  selScenario = c.dataset.s;
+  document.querySelectorAll("#scenarios .opt").forEach(x => x.setAttribute("aria-checked", "false"));
+  c.setAttribute("aria-checked", "true"); refreshLaunch();
+});
+function refreshLaunch() {
+  $("launch").disabled = !selServer;
+  $("launchHint").textContent = selServer ? `Ready: send ${SCENARIO_NAME[selScenario]} to ${selServer}.` : "Pick a server to begin.";
+}
+
+// ───────── live stream ─────────
+function connect() {
+  es = new EventSource("/api/pipeline/stream");
+  es.onopen = () => { $("conn").classList.add("on"); $("conn").lastChild.textContent = "Live"; };
+  es.onerror = () => { $("conn").classList.remove("on"); $("conn").lastChild.textContent = "Reconnecting"; };
+  es.onmessage = e => { try { onEvent(JSON.parse(e.data)); } catch (_) {} };
+}
+function stage(id, on, active) { const el = $("st-" + id); el.classList.toggle("on", !!on); el.classList.toggle("active", !!active); }
+function now(id, html) { $("lv-" + id).innerHTML = html; }
+const spin = (txt, c) => `<span class="spin" style="--c:${c}"></span>${txt}`;
+function say(msg) { const d = document.createElement("div"); d.innerHTML = `<time>${new Date().toLocaleTimeString("en-GB")}</time>${msg}`; $("log").prepend(d); }
+
+function headline(cls, h, p) {
+  const el = $("headline"); el.className = "headline " + (cls || "");
+  el.querySelector("h1").textContent = h; el.querySelector("p").textContent = p;
+}
+
+function newState() {
+  return { det: { BENIGN: 0, DDoS: 0, PortScan: 0 }, detTotal: 0, threats: 0, council: 0, defender: {},
+           finalAction: null, firstCouncil: null, commands: null, saidCouncil: false, saidDef: false, finished: false };
+}
+
+async function launch() {
+  $("launch").disabled = true;
+  resetView(true);
+  state = newState();
+  headline("", `Sending ${SCENARIO_NAME[selScenario]} to ${selServer}`, "30 network flows are being placed on the queue now.");
+  say(`You launched <b>${SCENARIO_NAME[selScenario]}</b> at <b>${esc(selServer)}</b>.`);
+  try {
+    const r = await fetch("/api/demo/attack", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scenario: selScenario, server_id: selServer, count: 30 }) });
+    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    run = await r.json();
+    $("reset").style.display = "block";
+    $("compareBlock").style.display = "";
+    stage("capture", true, true); now("capture", spin(`Sending ${run.count} flows from ${esc(run.server_id)}`, "var(--s-capture)"));
+    stage("kafka", true, true); now("kafka", spin("Flows queued on <b>raw-flows</b>", "var(--s-kafka)"));
+    say(`${run.count} flows were produced and placed on the Kafka queue.`);
+    renderCounters();
+  } catch (e) {
+    headline("", "The attack didn't launch", String(e.message || e));
+    say(`<b>Launch failed:</b> ${esc(e.message)}`);
+    $("launch").disabled = false;
+  }
+}
+
+function onEvent(ev) {
+  if (!run || !ev.flow_id || !String(ev.flow_id).startsWith(run.flow_prefix)) return;
+  if (ev.stage === "llm") { onLLM(ev); return; }
+
+  if (ev.stage === "detection") {
+    if (!state.detTotal) {
+      stage("capture", true, false); stage("kafka", true, false);
+      now("capture", `${run.count} flows sent`); now("kafka", "All flows picked up by the analyser");
+      say("The analyser took the flows off the queue and gave them to the ML models.");
+    }
+    state.detTotal++;
+    state.det[ev.attack_type] = (state.det[ev.attack_type] || 0) + 1;
+    if (ev.is_threat) state.threats++;
+    stage("ml", true, state.detTotal < run.count);
+    const top = Object.entries(state.det).sort((a, b) => b[1] - a[1])[0];
+    now("ml", `<b>${state.detTotal} of ${run.count}</b> analysed<br>Mostly <b>${esc(top[0])}</b><br><span style="color:var(--ink2)">Last: ${ev.confidence}% sure</span>`);
+    $("cmp-ml").textContent = top[0] === "BENIGN" ? "Normal traffic" : top[0];
+    $("cmp-ml-why").textContent = `${state.det[top[0]]} of ${state.detTotal} flows, ${ev.confidence}% confident on the latest.`;
+    if (state.detTotal === 1) say(`First ML verdict: <b>${esc(ev.attack_type)}</b>, ${ev.confidence}% confident.`);
+    if (state.detTotal === run.count) {
+      say(`ML finished: ${state.det.BENIGN || 0} normal, ${state.det.DDoS || 0} DDoS, ${state.det.PortScan || 0} port scan.`);
+      stage("ml", true, false);
+    }
+    if (ev.is_threat && !state.saidCouncil) { stage("council", true, true); now("council", spin("Calling the experts…", "var(--s-council)")); }
+  }
+
+  if (ev.stage === "council") {
+    if (ev.event === "enriching") {
+      stage("council", true, true);
+      if (!state.saidCouncil) { state.saidCouncil = true; say("The ML models raised an alarm, so the <b>AI expert council</b> is now reading the flow."); }
+      now("council", spin("Experts are thinking…", "var(--s-council)"));
+    }
+    if (ev.event === "error") now("council", `<span style="color:var(--attack)">LLM error: ${esc(ev.error || "")}</span>`);
+    if (ev.event === "complete") {
+      state.council++;
+      if (!state.firstCouncil) state.firstCouncil = ev;
+      stage("council", true, false);
+      now("council", `<b>${state.council}</b> flow${state.council > 1 ? "s" : ""} reviewed<br><span style="color:var(--ink2)">Agreement ${ev.consensus}%, severity ${esc(ev.severity)}</span>`);
+      sessionFinished(ev);
+      updateCouncilCompare();
+    }
+  }
+
+  if (ev.stage === "defender") {
+    if (ev.event === "commands") { state.commands = ev; renderCommands(); return; }
+    if (ev.event === "action") {
+      stage("defender", true, false);
+      state.defender[ev.action] = (state.defender[ev.action] || 0) + 1;
+      if (ev.is_re_evaluation || !state.finalAction) state.finalAction = ev;
+      now("defender", Object.entries(state.defender).map(([a, n]) => `<span class="act ${a}" style="font-size:12.5px;padding:1px 9px">${esc(ACTION_LABEL(a))}</span> ×${n}`).join("<br>"));
+      if (!state.saidDef) { state.saidDef = true; say(`The defender chose <b>${esc(ACTION_LABEL(ev.action))}</b>: ${esc(ACTION_MEANING[ev.action] || "")}`); }
+      updateDefenderCompare();
+    }
+  }
+  renderCounters(); maybeVerdict();
+}
+
+function renderCounters() {
+  if (!state || !run) return;
+  const acts = Object.values(state.defender).reduce((a, b) => a + b, 0);
+  $("counters").innerHTML =
+    `<div><b>${run.count}</b>sent</div><div><b>${state.detTotal}</b>analysed</div>` +
+    `<div><b>${state.threats}</b>flagged as attacks</div><div><b>${state.council}</b>reviewed by experts</div><div><b>${acts}</b>defender actions</div>`;
+}
+
+function updateCouncilCompare() {
+  const votes = Object.values(sessions).flatMap(s => Object.values(s.votes));
+  if (!votes.length) return;
+  const tally = votes.reduce((m, a) => (m[a] = (m[a] || 0) + 1, m), {});
+  const [top, n] = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
+  $("cmp-council").innerHTML = `<span class="act ${esc(top)}">${esc(ACTION_LABEL(top))}</span>`;
+  $("cmp-council-why").textContent = `${n} of ${votes.length} expert votes so far.`;
+  explain(top);
+}
+function updateDefenderCompare() {
+  const f = state.finalAction; if (!f) return;
+  $("cmp-def").innerHTML = `<span class="act ${esc(f.action)}">${esc(ACTION_LABEL(f.action))}</span>`;
+  $("cmp-def-why").textContent = (ACTION_MEANING[f.action] || "") + (f.is_re_evaluation ? " Decided after reading the experts' report." : " A fast first decision, made before the experts finished.");
+}
+function explain(councilTop) {
+  const mlAttack = state.threats > 0 && selScenario !== "normal";
+  const el = $("explain");
+  if (mlAttack && (councilTop === "MONITOR" || councilTop === "ALLOW")) {
+    el.innerHTML = `<b>The experts disagree with the ML models.</b> The ML models are confident this is an attack, but the experts looked at details such as the packet rate and flags and thought the flow looked quiet. This is why the system uses both: the ML models are fast, the experts catch likely false alarms, and the defender acts on the quick ML result first, then re-checks.`;
+    el.classList.add("show");
+  } else if (mlAttack) {
+    el.innerHTML = `<b>The experts agree with the ML models.</b> Two independent kinds of analysis point the same way, which makes the defender's response more trustworthy.`;
+    el.classList.add("show");
+  }
+}
+function renderCommands() {
+  const c = state.commands;
+  if (!c || !c.commands || !c.commands.length) return;
+  $("cmdBox").innerHTML = `<div class="meaning" style="margin-top:16px"><b>Firewall commands the defender would run</b> (dry run, nothing is executed):</div><pre class="cmd">${esc(c.commands.join("\n"))}</pre>`;
+}
+
+function maybeVerdict() {
+  if (!state || !run || state.finished || state.detTotal < run.count) return;
+  const attacks = state.threats;
+  if (attacks > 0 && !state.finalAction) return;
+  state.finished = true;
+  if (selScenario === "normal") {
+    headline("good", `${run.count - attacks} of ${run.count} flows were allowed through`,
+      attacks ? `${attacks} were flagged as suspicious: a false alarm, which is why the experts double-check.` : "No alarms were raised, exactly as it should be for normal traffic.");
+  } else {
+    headline("bad", `${attacks} of ${run.count} flows were flagged as ${SCENARIO_NAME[selScenario]}`,
+      state.finalAction ? `The defender responded with ${ACTION_LABEL(state.finalAction.action).toLowerCase()}. Scroll down to read what the AI experts concluded.` : "");
+  }
+}
+
+// ───────── AI expert sessions ─────────
+function getSession(flowId) {
+  if (sessions[flowId]) return sessions[flowId];
+  const box = $("sessions"); if (box.querySelector(".empty")) box.innerHTML = "";
+  const n = Object.keys(sessions).length + 1;
+  const el = document.createElement("article"); el.className = "session";
+  el.innerHTML = `<div class="top"><h3>Flow ${n} under review</h3><span class="meta">${esc(run.server_id)}</span><div class="vote-line" data-vote></div></div>
+    <div class="experts">${["analyst", "engineer", "intel"].map(r => `
+      <div class="expert" data-role="${r}" style="--c:${EXPERTS[r].color}">
+        <div class="who"><span class="avatar">${EXPERTS[r].initial}</span><h4>${EXPERTS[r].name}</h4></div>
+        <p class="job">${EXPERTS[r].job}</p>
+        <div class="engine"><span data-model>Waiting</span><span class="st" data-st></span></div>
+        <div class="fb" data-fb></div>
+        <div class="answer" data-ans></div>
+      </div>`).join("")}</div>`;
+  box.appendChild(el);
+  return sessions[flowId] = { el, votes: {}, n };
+}
+
+function onLLM(ev) {
+  const s = getSession(ev.flow_id);
+  if (ev.event === "start") {
+    const cell = s.el.querySelector(`[data-role="${ev.role}"]`); if (!cell) return;
+    callToCell[ev.call_id] = { cell, t0: Date.now(), done: false, role: ev.role, flow: ev.flow_id };
+    cell.querySelector("[data-model]").textContent = `${ev.provider}:${ev.model}`;
+    cell.querySelector("[data-ans]").dataset.prompt = ev.prompt_preview || "";
+    say(`<b>${EXPERTS[ev.role]?.name || ev.role}</b> is reading flow ${s.n}.`);
+    return;
+  }
+  const c = callToCell[ev.call_id]; if (!c) return;
+  const cell = c.cell;
+  if (ev.event === "fallback") {
+    const fb = cell.querySelector("[data-fb]"); fb.style.display = "block"; c.t0 = Date.now();
+    fb.textContent = `${ev.from} was too slow, so it was retried on ${ev.to}.`;
+  }
+  if (ev.event === "end") {
+    c.done = true;
+    cell.querySelector("[data-st]").textContent = ev.error ? `Failed after ${ev.duration_s}s` : `Answered in ${ev.duration_s}s`;
+    const j = parseJSON(ev.response);
+    const ans = cell.querySelector("[data-ans]");
+    ans.innerHTML = ev.error ? `<p class="reason" style="color:var(--attack)">${esc(shortErr(ev.response))}</p>` + rawBlock(ev.response, ans.dataset.prompt) : renderAnswer(c.role, j, ev.response, ans.dataset.prompt);
+    const act = j && (j.recommended_action || null);
+    if (act) { s.votes[c.role] = String(act).toUpperCase(); renderVoteLine(s); }
+  }
+}
+setInterval(() => {
+  for (const id in callToCell) {
+    const c = callToCell[id];
+    if (!c.done) c.cell.querySelector("[data-st]").innerHTML = `<span class="spin" style="--c:${EXPERTS[c.role]?.color}"></span>Thinking… ${Math.round((Date.now() - c.t0) / 1000)}s`;
+  }
+}, 1000);
+
+function renderVoteLine(s) {
+  const v = Object.values(s.votes); if (!v.length) return;
+  const tally = v.reduce((m, a) => (m[a] = (m[a] || 0) + 1, m), {});
+  const [top, n] = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
+  s.el.querySelector("[data-vote]").innerHTML = `Experts voted <span class="act ${esc(top)}">${esc(ACTION_LABEL(top))}</span> ${n} of ${v.length}`;
+  updateCouncilCompare();
+}
+function sessionFinished(ev) {
+  const s = sessions[ev.flow_id]; if (s) { s.el.querySelector("h3").textContent = `Flow ${s.n}: council decided`; }
+}
+
+function parseJSON(text) {
+  const t = String(text || "").replace(/<think>[\s\S]*?<\/think>/g, "").replace(/```json|```/g, "").trim();
+  const a = t.indexOf("{"), b = t.lastIndexOf("}");
+  if (a >= 0 && b > a) { try { return JSON.parse(t.slice(a, b + 1)); } catch (_) {} }
+  return null;
+}
+function shortErr(t) {
+  const s = String(t);
+  if (/429|rate limit/i.test(s)) return "This model hit its free-tier usage limit and could not answer in time.";
+  return s.replace(/^Error:\s*/, "").slice(0, 220);
+}
+function rawBlock(raw, prompt) {
+  return `<details><summary>See what it was asked and the raw reply</summary><pre>${esc(prompt || "")}</pre><pre>${esc(raw)}</pre></details>`;
+}
+function featureList(items) {
+  if (!items || !items.length) return "";
+  return "<ul>" + items.map(x => {
+    const [name, ...rest] = String(x).split(/\s[—-]\s/);
+    return rest.length ? `<li><b>${esc(name)}</b> <span>${esc(rest.join(" — "))}</span></li>` : `<li>${esc(x)}</li>`;
+  }).join("") + "</ul>";
+}
+function tags(arr) { return (arr || []).map(x => `<span class="tag">${esc(x)}</span>`).join(""); }
+
+function renderAnswer(role, j, raw, prompt) {
+  if (!j) return `<p class="reason">${esc(raw)}</p>`;
+  const act = String(j.recommended_action || "").toUpperCase();
+  const chip = act ? `<span class="act ${esc(act)}">${esc(ACTION_LABEL(act))}</span>` : "";
+  let verdict = "", rows = "";
+  if (role === "analyst") {
+    verdict = `${chip}<span>${esc(j.attack_type || "Unknown")} · severity ${esc(j.severity || "?")}</span>`;
+    if (j.indicators && j.indicators.length) rows += `<dt>Signs it saw</dt><dd>${tags(j.indicators)}</dd>`;
+    if (j.confidence != null) rows += `<dt>Its confidence</dt><dd>${esc(j.confidence)}%</dd>`;
+  } else if (role === "engineer") {
+    const valid = j.model_decision_valid;
+    verdict = `${chip}<span>${valid === false ? "Thinks the ML models are wrong" : "Thinks the ML models are right"}</span>`;
+    rows += `<dt>False alarm risk</dt><dd>${esc(j.false_positive_risk || "?")}</dd>`;
+    if (j.anomalous_features && j.anomalous_features.length) rows += `<dt>Suspicious</dt><dd>${featureList(j.anomalous_features)}</dd>`;
+    if (j.normal_features && j.normal_features.length) rows += `<dt>Looks normal</dt><dd>${featureList(j.normal_features)}</dd>`;
+  } else {
+    verdict = `${chip}<span>${j.signature_match && j.signature_match !== "Unknown" ? "Matches " + esc(j.signature_match) : "No known signature"}</span>`;
+    rows += `<dt>Source type</dt><dd>${esc(j.threat_actor_type || "unknown")}</dd>`;
+    if (j.ioc_pattern) rows += `<dt>Pattern</dt><dd>${esc(j.ioc_pattern)}</dd>`;
+    if (j.attribution_confidence != null) rows += `<dt>Its confidence</dt><dd>${esc(j.attribution_confidence)}%</dd>`;
+  }
+  return `<div class="verdict">${verdict}</div>
+    ${j.reasoning ? `<p class="reason">${esc(j.reasoning)}</p>` : ""}
+    <dl>${rows}</dl>${rawBlock(raw, prompt)}`;
+}
+
+function resetView(keepSelection) {
+  ["capture", "kafka", "ml", "council", "defender"].forEach(s => { stage(s, false, false); now(s, "Waiting to launch"); });
+  $("sessions").innerHTML = '<div class="empty">Nothing yet. The experts wake up once the ML models raise an alarm.</div>';
+  for (const k in sessions) delete sessions[k]; for (const k in callToCell) delete callToCell[k];
+  $("log").innerHTML = ""; $("counters").innerHTML = ""; $("cmdBox").innerHTML = "";
+  ["cmp-ml", "cmp-council", "cmp-def"].forEach(i => $(i).textContent = i === "cmp-ml" ? "—" : "Waiting…");
+  ["cmp-ml-why", "cmp-council-why", "cmp-def-why"].forEach(i => $(i).textContent = "");
+  $("explain").className = "explain"; $("compareBlock").style.display = "none";
+  if (!keepSelection) headline("", "Watch an attack move through the system", "Choose a server and a type of traffic on the left, then launch. You will see each stage react, and read what three AI experts think about it.");
+}
+
+// ───────── lab mode: pauses background analysis while this page is open ─────────
+let labTimer = null;
+function labPing(active) {
+  return fetch("/api/demo/lab", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ active }), keepalive: true }).catch(() => {});
+}
+function enterLab() {
+  $("gate").style.display = "none"; $("pausebar").style.display = "block";
+  labPing(true); labTimer = setInterval(() => labPing(true), 8000);
+  loadServers(); connect();
+}
+function leaveLab() {
+  clearInterval(labTimer);
+  try { navigator.sendBeacon("/api/demo/lab", new Blob([JSON.stringify({ active: false })], { type: "application/json" })); } catch (_) { labPing(false); }
+}
+window.addEventListener("pagehide", leaveLab);
+
+$("launch").onclick = launch;
+$("reset").onclick = () => { run = null; state = null; resetView(false); $("reset").style.display = "none"; $("launch").disabled = !selServer; };
+</script>
+<script src="/static/groq-key.js" defer></script>
+</body>
+</html>

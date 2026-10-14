@@ -118,6 +118,19 @@ Now go to [Part B](#part-b-start-everything-one-command).
 
 On Windows we run the project inside **WSL 2** (a real Ubuntu inside Windows). This avoids path and line-ending problems. Needs Windows 10 (version 2004 or newer) or Windows 11.
 
+> **What is WSL, in plain words?** WSL is a small Linux (Ubuntu) that lives inside Windows. You open it like any app, and you get a black terminal window. The project's scripts are written for Linux, so we run them there. Docker Desktop (a normal Windows app) does the heavy lifting in the background, and the two talk to each other.
+>
+> **Two windows, two jobs. Do not mix them up:**
+>
+> | Window | Used for |
+> |---|---|
+> | **PowerShell** (blue) | Only step A1: installing WSL. Nothing else. |
+> | **Ubuntu** (black) | **Every other command in this guide.** Its prompt looks like `name@PC:~$`. |
+>
+> **Where files live:** inside Ubuntu, your home folder is `~`. Keep the project there (`~/Agentic-IDS-`). To see it in Windows File Explorer, run `explorer.exe .` in Ubuntu, or type `\\wsl$\Ubuntu` in the Explorer address bar. Avoid keeping the project under `/mnt/c/...` (your C: drive): it is slower and more likely to break.
+>
+> **Browser:** the dashboard opens in your normal Windows browser at http://localhost:5001. WSL and Windows share `localhost`.
+
 ### A1. Install WSL with Ubuntu
 1. Click Start, type `PowerShell`, right-click **Windows PowerShell**, choose **Run as administrator**.
 2. Run:
@@ -141,6 +154,28 @@ docker run --rm hello-world
 docker compose version
 ```
 The last two must print without errors. If Docker is "not found", redo A2 step 3.
+
+### A3b. Give Docker a working internet connection (do this now, it prevents the most common error)
+On many Windows PCs, especially on college, office or VPN networks, Docker cannot reach the Python package server while building, and the build fails with `Could not find a version that satisfies the requirement numpy (from versions: none)`. Prevent it:
+1. Open **Docker Desktop**, click the **gear** (Settings), then **Docker Engine** on the left.
+2. You will see a box of text (JSON). Make it look like this. Keep any lines that are already there, and put a comma after the line above the new one:
+```json
+{
+  "builder": {
+    "gc": {
+      "defaultKeepStorage": "20GB",
+      "enabled": true
+    }
+  },
+  "experimental": false,
+  "dns": ["8.8.8.8", "1.1.1.1"]
+}
+```
+3. Click **Apply & restart** and wait for **Engine running**.
+4. Back in **Ubuntu**, test it (it should finish with `Successfully installed numpy`):
+```bash
+docker run --rm python:3.11-slim pip install numpy
+```
 
 ### A4. Download the project (into the Ubuntu side)
 Do this in your Ubuntu home folder, **not** inside `/mnt/c`:
@@ -249,6 +284,10 @@ To start again later, just run `bash run_all.sh` again (about 2 minutes now). Do
 | `Missing backend/data/raw/filtered_nowebatt.csv` | Do the "Add the dataset file" step for your system. |
 | `still says YOUR_KEY_HERE` or `Missing backend/config/.env` | Do the Groq key step for your system. |
 | `no such file or directory: run_all.sh` | You are not in the project folder. `cd` into it (the `ls` check in the download step should list `run_all.sh`). |
+| `Could not find a version that satisfies the requirement numpy (from versions: none)` or any `pip install` failing during the build | Docker has no working DNS. Do Windows step **A3b** (add `"dns": ["8.8.8.8", "1.1.1.1"]` in Docker Desktop > Settings > Docker Engine > Apply & restart). Still failing: turn off any VPN, try your phone hotspot (college Wi-Fi often blocks PyPI), or run `wsl --shutdown` in PowerShell and reopen Docker Desktop and Ubuntu. On Ubuntu Linux, test with the same `docker run --rm python:3.11-slim pip install numpy` command. |
+| `ReadTimeoutError ... files.pythonhosted.org` during the build | The download was too slow and timed out. Make sure you have the latest project (`git pull`), because the build now uses a much smaller CPU-only PyTorch and retries automatically. Then run `bash run_all.sh` again. It resumes from what is already downloaded. If it keeps failing, use a faster network or a phone hotspot. |
+| Windows: commands like `bash run_all.sh` do not work in PowerShell | You are in the wrong window. Open the **Ubuntu** app (black window, prompt like `name@PC:~$`). Only the WSL install in A1 uses PowerShell. |
+| Windows: project is slow or acts strange under `/mnt/c/...` | Move it to the Ubuntu home folder: `cd ~` then `git clone -b demo https://github.com/sumeettummarmatti/Agentic-IDS-.git`, and copy `filtered_nowebatt.csv` and your `.env` again. |
 | `bad interpreter` or `\r: command not found` (Windows) | The files got Windows line endings. Re-clone the project inside Ubuntu (`git clone` in `~`), not from a Windows folder. |
 | Browser tabs did not open | Open http://localhost:5001 and http://localhost:8080 yourself. |
 | Dashboard page is blank | Wait 1 minute and refresh. Still blank: `docker restart agentic-ids-consumer`. |

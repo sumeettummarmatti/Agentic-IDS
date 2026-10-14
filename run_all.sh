@@ -97,15 +97,24 @@ if [[ "$MODELS" == *lmstudio:* ]]; then
   fi
 fi
 
+# ───────────────────────── 3b. Required files ─────────────────────────
+[ -f backend/data/raw/filtered_nowebatt.csv ] || die "Missing backend/data/raw/filtered_nowebatt.csv (the dataset). See README step 4."
+[ -f backend/config/.env ] || die "Missing backend/config/.env. See README step 5 (copy .env.example to .env and paste your Groq key)."
+
 # ───────────────────────── 4. Groq key ─────────────────────────
 GROQ_API_KEY="${GROQ_API_KEY:-$(env_val GROQ_API_KEY)}"
+if [ "$GROQ_API_KEY" = "YOUR_KEY_HERE" ]; then
+  die "backend/config/.env still says YOUR_KEY_HERE. Paste your Groq key there (README step 5)."
+fi
 if [ -z "$GROQ_API_KEY" ]; then
   warn "No GROQ_API_KEY found in backend/.env or backend/config/.env — Groq calls will fail"
 fi
 export GROQ_API_KEY
 
-# ───────────────────────── 5. LLM check (non-fatal) ─────────────────────────
-if [ -f backend/check_llm.py ]; then
+# ───────────────────────── 5. LLM check (optional) ─────────────────────────
+# Off by default: on a fresh Mac, running python can pop up an "install developer tools" dialog.
+# Run with CHECK_LLM=1 ./run_all.sh to test every LLM provider before starting.
+if [ "${CHECK_LLM:-0}" = "1" ] && [ -f backend/check_llm.py ]; then
   PY=""
   for c in python python3; do command -v "$c" >/dev/null && { PY="$c"; break; }; done
   if [ -n "$PY" ]; then
